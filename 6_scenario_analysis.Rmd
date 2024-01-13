@@ -1,0 +1,2864 @@
+---
+title: "Scenario analysis"
+author: "Donghao Xu"
+date: "2023-07-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load data and simulation results}
+load("1_program/current_budget_new.Rdata")
+load("1_program/county_analysis.Rdata")
+load("1_program/soil_group.Rdata")
+```
+
+
+```{r}
+sim_pH_2019 <- all_sim_pH %>% filter(X.time==2019) %>% arrange(X.count)
+
+non_cal_soil <- non_cal_soil %>% 
+  mutate(sim_pH=ifelse(ID %in% sim_pH_2019$X.count, sim_pH_2019$X.pH, pH_19),
+         CEC=ifelse(is.na(CEC_19), (CEC_14+CEC_85*10)/2, (CEC_14+CEC_85*10+CEC_19*10)/3),
+         pH_gap = ifelse(sim_pH<6.0, 6.0-sim_pH, 0),
+         Ca_eq = 0.44 * CEC * pH_gap * bulkdens * 0.2)
+
+non_cal_soil$Ca_eq <- round(non_cal_soil$Ca_eq, 2)
+
+```
+
+## Basic definition of some indexes
+
+````{r}
+# Default value for NUE
+dep_NUE=0.75; Nfix_NUE=0.9; fer_NUE=0.75; man_NUE=0.6
+
+# Calculate the environmental N input by atmospheric deposition and N fixation
+dep_N <- 0.234
+crop_Nfix <- site_Nfix %>% arrange(ID) %>% 
+  mutate(`2020`=`2019`, Nfix=`2019`)
+````
+
+## Scenario design for balanced N fertilization (BN)
+only balance mineral N and P input with constant straw returning rate: 
+
+```{r cars}
+crop_demand <- tot_crop_removal %>% 
+  filter(Year==2019) %>% arrange(Site)
+
+# calculate required input from fertilizer in N
+crop_demand <- mutate(crop_demand, 
+                      Nfix=crop_Nfix$Nfix, N_dep=dep_N, 
+                      N_req=N-Nfix*Nfix_NUE-N_dep*dep_NUE, 
+                      N_req = ifelse(N_req<0, 0, N_req))
+
+man_N_P <- cur_man_in %>% filter(Year==2019) %>% 
+  arrange(Site) %>% 
+  mutate(N=(NH4+NO3), N_req=crop_demand$N_req/man_NUE) %>% 
+  dplyr::select(colnames(crop_demand)[c(1:10, 13)]) %>% 
+  mutate(N_new = ifelse(N>N_req, N_req, N))
+
+bal_man <- man_N_P %>% 
+  mutate(P = P/N*N_new, K = K/N*N_new, Ca = Ca/N*N_new, 
+         Mg = Mg/N*N_new, Na = Na/N*N_new, S = S/N*N_new, Cl = Cl/N*N_new, 
+         N = N_new) %>% dplyr::select(-c(N_req, N_new))
+bal_man[is.na(bal_man)] <- 0
+
+min_N_P <- cur_fer_in %>% filter(Year==2019) %>% 
+  arrange(Site) %>% 
+  mutate(N=(NH4+NO3), 
+         N_req=(crop_demand$N_req - bal_man$N*man_NUE)/fer_NUE, 
+         BAU_P = P + cur_man_in[cur_man_in$Year==2019, "P"], 
+         BAU_K = K + cur_man_in[cur_man_in$Year==2019, "K"])
+
+min_N_P[min_N_P$N_req<0, "N_req"] <- 0
+
+min_N_P <- mutate(min_N_P,  Year=2020, P = BAU_P-bal_man$P,
+                  Ca=P*310*123.8/43.7/200, 
+                  S=P*310*76.5/43.7/160,
+                  NO3=N_req/2, NH4=N_req/2,
+                  K = BAU_K-bal_man$K,
+                  Cl=K*390*75.55/83/355) %>% 
+  dplyr::select(colnames(cur_fer_in))
+
+# Compare the current and balanced nutrient input
+bal_min_in <- min_N_P %>% 
+  mutate(N=NH4+NO3, An=S+Cl, BC=Ca+Mg+Na+K, charge_bal=NH4+BC-An-P-NO3)
+names(bal_min_in) <- paste0("bal_", names(bal_min_in))
+
+BNP_fer <- rbind(cur_fer_in, min_N_P) %>% arrange(Site, Year)
+
+BNP_man <- bal_man%>% mutate(NO3=N/2, NH4=N/2, Year=2020) %>% 
+  dplyr::select(colnames(cur_man_in)) %>% rbind(cur_man_in) %>% 
+  arrange(Site, Year)
+
+BNP_crop <- tot_crop_removal
+
+BNP_NH3 <- cbind(min_N_P[, c(1, 2, 4, 5)],  bal_man[, "N"]) %>% 
+  mutate(cof_fer = ifelse(`bal_man[, "N"]`==0, 0.943, 
+                          ifelse(NO3==0, 1.365, 0.903)), 
+         N = NO3+NH4+`bal_man[, "N"]`) 
+
+BNP_NH3$land_use <- BNP_NH3$clay <- rep(NA, nrow(BNP_NH3))
+
+for (i in 1:nrow(BNP_NH3)){
+  id_site <- BNP_NH3$Site[i]
+  BNP_NH3$land_use[i] <- soil_pro[soil_pro$ID==id_site, "crop_pat"]
+  BNP_NH3$clay[i] <- soil_pro[soil_pro$ID==id_site, "Clay_85"]
+}
+
+BNP_NH3 <- mutate(BNP_NH3, 
+                  cum_NH3=exp((-1.612) + 0.007*N*140 + 0.043*clay + 0.038*18 + cof_fer)/N/140) %>% 
+  dplyr::select(colnames(cur_NH3)) %>% rbind(cur_NH3) %>% arrange(Site, Year)
+
+BNP_NH3[is.infinite(BNP_NH3$cum_NH3), "cum_NH3"] <- 0
+BNP_NH3[BNP_NH3$cum_NH3>=1, "cum_NH3"] <- 0.99
+
+
+BNP_NH3_sum <- filter(BNP_NH3, Site %in% non_cal_soil$ID)
+
+ggplot(BNP_NH3_sum)+
+  geom_boxplot(aes(land_use, cum_NH3))
+```
+
+## scenario of enhanced straw returning and manure recycling (BNR)
+
+```{r}
+har_removal <- har_demand %>% filter(Year==2019) %>% arrange(Site)
+
+crop_demand <- har_removal %>% mutate(Nfix=crop_Nfix$Nfix, N_dep=dep_N, 
+                                 N_req=N-Nfix*Nfix_NUE-N_dep*dep_NUE, 
+                                 N_req = ifelse(N_req<0, 0, N_req))
+
+all_pot_man_nut <- apply(pot_man_nut[pot_man_nut$Year==2019, 1:8], 2, sum) %>% 
+  t() %>% as.data.frame() 
+
+max_rec_N <- 0.75
+
+# Assuming 20% of N, and 10% of other nutrients lost
+ratio <- c(14/max_rec_N, 31/0.9, 39/0.9, 20/0.9, 12/0.9, 23/0.9, 16/0.9, 35.5/0.9)
+all_pot_Nkeq <- all_pot_man_nut[,1:8]/ratio[col(all_pot_man_nut[,1:8])]/(all_pot_man_nut$N*max_rec_N/14)
+
+# set NUE for manure 0.6, and using all_pot_keq to calculate manure nutrient inputs
+man_rep_ratio <- 0.80
+
+BNR_man_nut <- crop_demand %>% 
+  mutate(Year=2020, N = N_req*man_rep_ratio/man_NUE)
+
+for (i in 1:nrow(BNR_man_nut)){
+  BNR_man_nut[i, 3:10] <-  BNR_man_nut[i, 3] * all_pot_Nkeq
+}
+
+min_N_P <- cur_fer_in %>% filter(Year==2019) %>% 
+  arrange(Site) %>% 
+  mutate(N_req=(crop_demand$N_req - BNR_man_nut$N*man_NUE)/fer_NUE, 
+         BN_fer_P = BNP_fer[BNP_fer$Year==2020, "P"], 
+         BN_fer_K = BNP_fer[BNP_fer$Year==2020, "K"])
+
+min_N_P[min_N_P$N_req<0, "N_req"] <- 0
+
+min_N_P <- mutate(min_N_P,  Year=2020, P = BN_fer_P,
+                  Ca=P*310*123.8/43.7/200, 
+                  S=P*310*76.5/43.7/160,
+                  NO3=N_req/2, NH4=N_req/2,
+                  K = BN_fer_K,
+                  Cl=K*390*75.55/83/355) %>% 
+  dplyr::select(colnames(cur_fer_in))
+
+# Compare the current and balanced nutrient input
+BNR_min_in <- min_N_P %>% 
+  mutate(N=NH4+NO3, An=S+Cl, BC=Ca+Mg+Na+K, charge_bal=NH4+BC-An-P-NO3)
+names(BNR_min_in) <- paste0("BNR_", names(BNR_min_in))
+
+BNR_fer <- rbind(cur_fer_in, min_N_P) %>% arrange(Site, Year)
+BNR_man <- BNR_man_nut %>% mutate(NO3=N/2, NH4=N/2) %>% 
+  dplyr::select(colnames(cur_man_in)) %>% 
+  rbind(cur_man_in)%>% arrange(Site, Year)
+
+har_removal$Year <- 2020
+BNR_crop <- rbind(har_removal, tot_crop_removal)
+
+BNR_NH3 <- cbind(min_N_P[,c(1,2, 4, 5)], BNR_man_nut[, "N"]) %>% 
+  mutate(cof_fer = ifelse(`BNR_man_nut[, "N"]`==0, 0.943, 
+                          ifelse(NO3==0, 1.365, 0.903)), 
+         N = NO3+NH4+`BNR_man_nut[, "N"]`) 
+
+BNR_NH3 <- mutate(BNR_NH3, N=NH4+NO3+`BNR_man_nut[, "N"]`)
+BNR_NH3$land_use <- BNR_NH3$clay <- rep(NA, nrow(BNR_NH3))
+
+for (i in 1:nrow(BNR_NH3)){
+  id_site <- BNR_NH3$Site[i]
+  BNR_NH3$land_use[i] <- soil_pro[soil_pro$ID==id_site, "crop_pat"]
+  BNR_NH3$clay[i] <- soil_pro[soil_pro$ID==id_site, "Clay_85"]
+}
+
+BNR_NH3 <- mutate(BNR_NH3, 
+                  cum_NH3=exp((-1.612) + 0.007*N*140 + 0.043*clay + 0.038*18 + cof_fer)/N/140) %>% 
+  dplyr::select(colnames(cur_NH3)) %>% 
+  rbind(cur_NH3) %>% arrange(Site, Year)
+
+BNR_NH3[is.infinite(BNR_NH3$cum_NH3), "cum_NH3"] <- 0
+BNR_NH3[BNR_NH3$cum_NH3>=1, "cum_NH3"] <- 0.99
+
+BNR_NH3_sum <- filter(BNR_NH3, Site %in% non_cal_soil$ID)
+
+ggplot(BNR_NH3_sum)+
+  geom_boxplot(aes(land_use, cum_NH3))
+```
+## scenario of balanced N, P straw returning-------------
+
+```{r}
+P_dep <- 0.01
+loc_P <- match(crop_demand$Site, soil_pro$ID)
+crop_demand <- mutate(crop_demand, 
+                      P_req = soil_pro[loc_P, "P_index"]*P - 0.01,
+                      P_req = ifelse(P_req<0, 0, P_req),
+                      crop = soil_pro[loc_P, "crop_pat"], 
+                      soil_type = soil_pro[loc_P, "soil_type"])
+
+crop_P_index <- crop_demand %>% group_by(crop, soil_type) %>% 
+  summarise(n=n(), mean_P=mean(P), mean_P_req=mean(P_req), 
+            ratio=mean_P_req/mean_P)
+
+# Use P as the indicator to calculate organic manure input
+cal_man_rep <- 0.9
+non_man_rep <- 1.0
+BNPR_man_nut <- crop_demand %>% 
+  mutate(Year=2020, 
+         P = ifelse(soil_type=="Non-calcareous", P_req * non_man_rep, 
+                    P_req * cal_man_rep))
+
+all_pot_Pkeq <- all_pot_man_nut[,1:8]/ratio[col(all_pot_man_nut[,1:8])]/(all_pot_man_nut$P*0.9/31)
+
+for (i in 1:nrow(BNPR_man_nut)){
+  BNPR_man_nut[i, 3:10] <-  BNPR_man_nut$P[i] * all_pot_Pkeq
+}
+
+#-----calculate the fertilizer-N/P based on fertilizer NUE 75% and PUE 100%------
+min_N_P <- cur_fer_in %>% filter(Year==2019) %>% 
+  arrange(Site) %>% 
+  mutate(N_req=(crop_demand$N_req - BNPR_man_nut$N*man_NUE)/fer_NUE, 
+         P_req = (crop_demand$P_req - BNPR_man_nut$P), 
+         N_req = ifelse(N_req<0, 0, N_req), 
+         BN_fer_K = BNP_fer[BNP_fer$Year==2020, "K"])
+
+min_N_P <- mutate(min_N_P,  Year=2020, P=P_req,
+                  Ca=P*310*123.8/43.7/200, 
+                  S=P*310*76.5/43.7/160,
+                  NO3=N_req/2, NH4=N_req/2,
+                  K = BN_fer_K,
+                  Cl=K*390*75.55/83/355) %>% 
+  dplyr::select(colnames(cur_fer_in))
+
+# Compare the current and balanced nutrient input
+BNPR_min_in <- min_N_P %>% 
+  mutate(N=NH4+NO3, An=S+Cl, BC=Ca+Mg+Na+K, charge_bal=NH4+BC-An-P-NO3)
+names(BNPR_min_in) <- paste0("BNPR_", names(BNPR_min_in))
+
+# make new fertilizer input and crop removal files
+BNPR_fer <- rbind(cur_fer_in, min_N_P) %>% arrange(Site, Year)
+
+BNPR_man <- BNPR_man_nut %>% mutate(NO3=N/2, NH4=N/2, Year=2020) %>% 
+  dplyr::select(colnames(cur_man_in)) %>% 
+  rbind(cur_man_in)%>% arrange(Site, Year)
+
+har_removal$Year <- 2020
+BNPR_crop <- BNR_crop
+
+BNPR_NH3 <- cbind(min_N_P[,c(1, 2, 4, 5)], BNPR_man_nut[, "N"]) %>% 
+  mutate(cof_fer = ifelse(`BNPR_man_nut[, "N"]`==0, 0.943, 
+                          ifelse(NO3==0, 1.365, 0.903)), 
+         N = NO3+NH4+`BNPR_man_nut[, "N"]`) 
+BNPR_NH3$land_use <- BNPR_NH3$clay <- rep(NA, nrow(BNPR_NH3))
+
+for (i in 1:nrow(BNPR_NH3)){
+  id_site <- BNPR_NH3$Site[i]
+  BNPR_NH3$land_use[i] <- soil_pro[soil_pro$ID==id_site, "crop_pat"]
+  BNPR_NH3$clay[i] <- soil_pro[soil_pro$ID==id_site, "Clay_85"]
+}
+
+BNPR_NH3 <- mutate(BNPR_NH3, 
+                  cum_NH3=exp((-1.612) + 0.007*N*140 + 0.043*clay + 0.038*18 + cof_fer)/N/140) %>% 
+  dplyr::select(colnames(cur_NH3)) %>% 
+  rbind(cur_NH3) %>% arrange(Site, Year)
+
+BNPR_NH3[is.infinite(BNPR_NH3$cum_NH3), "cum_NH3"] <- 0
+BNPR_NH3[BNPR_NH3$cum_NH3>=1, "cum_NH3"] <- 0.99
+
+BNPR_NH3_sum <- filter(BNPR_NH3, Site %in% non_cal_soil$ID)
+
+ggplot(BNPR_NH3_sum)+
+  geom_boxplot(aes(land_use, cum_NH3))
+
+
+
+```
+# make nutrient input-output file for a single site
+
+
+```{r warning=FALSE}
+sce_change <- function(sce_name, sce_NH3, sce_fer, sce_man, sce_crop, sce_Nfix){
+  ID_list <- read.csv(file.path("Inputs", sce_name, "all_crop.csv"))
+  for (i in 1:nrow(ID_list)){
+    # derive the site information
+    tar_site <- ID_list$Site[i]
+    
+    pri_file <- ifelse(soil_pro[soil_pro$ID==tar_site, "crop_pat"]=="Paddy", 
+                       "S_rice", "S_upland")
+    
+    src_folder <- file.path("Inputs", pri_file)
+    dst_folder <- file.path("Inputs", sce_name, as.character(i))
+
+    N_emi <- sce_NH3[sce_NH3$Site==tar_site,]
+    
+    tar_Nfix <- sce_Nfix[sce_Nfix$ID==tar_site, ] %>% 
+      dplyr::select(-c("ID", "Nfix")) %>% 
+      t() %>% as.data.frame() 
+    tar_Nfix <- arrange(tar_Nfix, row.names(tar_Nfix))
+
+    # derive the fertilizer and manure use per site
+    tar_fer <- sce_fer %>% filter(Site==tar_site) %>% 
+      arrange(Year) %>% dplyr::select(-Site) %>% 
+      mutate(NO3=NO3-NO3*N_emi$cum_NH3, NH4=NH4-NH4*N_emi$cum_NH3)
+    
+    # Note that 35% of organic N goes to the soil pool directly based on long-term experiment results
+    tar_man <- sce_man %>% filter(Site==tar_site) %>% 
+      arrange(Year) %>% dplyr::select(-Site) 
+    
+    # calculate the input to soil N pool by organic manure (35% of total N)
+    if(nrow(tar_man)!=0){
+      org_N <- subset(tar_man, TRUE, c("NO3", "NH4"))
+      org_N_in <- as.data.frame(org_N) %>% mutate(N=(NO3+NH4)*0.35)
+      tar_man <- mutate(tar_man, NO3=NO3*0.65-NO3*N_emi$cum_NH3, 
+                        NH4=NH4*0.65-NH4*N_emi$cum_NH3)
+      
+    } else{
+      org_N_in <- 0
+    }
+    
+    if (nrow(tar_fer)<37 & nrow(tar_man)<37){
+      tar_fer[37,] <- tar_fer[36,]
+      tar_fer$Year[37] <- 2020
+      
+      tar_man[37,] <- tar_man[36,]
+      tar_man$Year[37] <- 2020
+    }
+
+    # Combine the atmospheric deposition
+    dep <- read.table(pathJoin(src_folder, "002308.dpy"), 
+                      sep = "\t", header = TRUE, comment.char = "") 
+    dep[37,] <- dep[36,]
+    
+    dep$X.year[37] <- 2020; rownames(dep) <- NULL
+    
+    tar_dep <- cbind(dep[,1] , round((tar_fer[,-1] + tar_man[,-1] + dep[,-1]), 2))
+    colnames(tar_dep) <- c("!year", "SOXdep", "NOXdep", "NH3dep", "Cadep", "Mgdep", "Kdep", "Nadep", "Cldep", "Pdep")
+    
+    tar_dep[38, ] <- tar_dep[37, ]
+    tar_dep$`!year`[38] <- 2021
+    
+    if ( tar_site %in% non_cal_soil$ID)
+    tar_dep[tar_dep$`!year`==2020, "Cadep"] <- 
+      tar_dep[tar_dep$`!year`==2020, "Cadep"] + non_cal_soil[non_cal_soil$ID==tar_site, "Ca_eq"] 
+    
+    # calculate nutrient crop removal
+    tar_crop_nut <- sce_crop %>% filter(Site==tar_site) %>% 
+      arrange(Year) %>% dplyr::select(-Site)
+    
+    if (nrow(tar_crop_nut)<37){
+      tar_crop_nut[37,] <- tar_crop_nut[36,]
+      tar_crop_nut$Year[37] <- 2020
+    }
+
+    # use Clf and Nlf from Qiyang long-term experiment and add the C and N input from manure
+    tar_crop_nut$Clf <- rep(200, nrow(tar_crop_nut))
+    tar_crop_nut$Nlf <- rep(4, nrow(tar_crop_nut))
+    
+    tar_crop_nut$Clf <- tar_crop_nut$Clf + org_N_in$N*14* 15    # assuming C/N is 15
+    tar_crop_nut$Nlf <- tar_crop_nut$Nlf + org_N_in$N*14
+    
+    tar_crop_nut$Nfix <- rep(tar_Nfix, nrow(tar_crop_nut))
+    
+    colnames(tar_crop_nut) <- c("!year", "Nupt", "Pupt", "Kupt", "Caupt", 
+                                "Mgupt", "Naupt", "Supt", "Clupt","Clf", "Nlf", "Nfix")
+
+    tar_crop_nut[tar_crop_nut$`!year`==1984, -1] <- rep(0, ncol(tar_crop_nut))
+    tar_crop_nut$Nfix <- tar_Nfix[,1]
+    
+    tar_crop_nut[38, ] <- tar_crop_nut[37, ]
+    tar_crop_nut$`!year`[38] <- 2021
+    
+    write.table(tar_crop_nut, pathJoin(dst_folder, "upt_lf.in"), sep="\t",
+                quote=FALSE, row.names = FALSE, qmethod = "double")
+    
+    # minus the Cl uptake from deposition
+    tar_dep$Cldep <- tar_dep$Cldep - tar_crop_nut$Clupt
+    
+    tar_dep[tar_dep$Cldep<0, "Cldep"] <- 0
+
+    write.table(tar_dep, pathJoin(dst_folder, "QY.frt"), sep="\t",
+                quote=FALSE, row.names = FALSE, qmethod = "double")
+  }
+}
+
+sce_change("BAUL", cur_NH3, cur_fer_in, cur_man_in, tot_crop_removal, crop_Nfix)
+sce_change("BNP", BNP_NH3, BNP_fer, BNP_man, BNP_crop, crop_Nfix)
+sce_change("BNR", BNR_NH3, BNR_fer, BNR_man, BNR_crop, crop_Nfix)
+sce_change("BNPR", BNPR_NH3, BNPR_fer, BNPR_man, BNPR_crop, crop_Nfix)
+
+sce_change("Ca_BNPR", BNPR_NH3, BNPR_fer, BNPR_man, BNPR_crop, crop_Nfix)
+```
+
+````{r}
+# Derive the lists for all scenario
+BAU_list <- read.csv("Inputs/Non_cal/all_crop.csv")
+BAUL_list <- read.csv("Inputs/BAUL/all_crop.csv")
+BNP_list <- read.csv("Inputs/BNP/all_crop.csv")
+BNR_list <- read.csv("Inputs/BNR/all_crop.csv")
+BNPR_list <- read.csv("Inputs/BNPR/all_crop.csv")
+cal_BAU <- read.csv("Inputs/Run_Ca/all_crop.csv")
+cal_BNPR <- read.csv("Inputs/Ca_BNPR/all_crop.csv")
+
+in_out_budget <- function(cal_list){
+  
+  all_upt <- all_dep <- all_out <- data.frame()
+  
+  for (i in 1:nrow(cal_list)){
+    file_loc <- cal_list$out_loc[i]
+    site_name <- cal_list$Site[i]
+    site_code <- gsub("!", "", readLines(file_loc, n=1))
+    
+    if (site_code==site_name){
+      
+      df_out <-  read.table(file_loc, skip=31, header=TRUE, encoding='UTF-8')
+      df_out$X.count <- rep(site_code, nrow(df_out))
+      start_year <- df_out$X.time[1] - 0.5
+      end_year <- df_out$X.time[length(df_out$X.time)] - 0.5
+      df_out$X.time <- seq(start_year, end_year, by=1)
+      all_out <- rbind(all_out, df_out)
+      
+      upt_file <- gsub("vsdp.out", "upt_lf.in", file_loc)
+      CK_uptake <- read.table(upt_file,  header = TRUE, encoding='UTF-8')
+      colnames(CK_uptake) <- gsub("upt", "", colnames(CK_uptake))
+      site_upt <- CK_uptake %>% filter(X.year>=start_year) %>% 
+        mutate(Site=site_code, NH4 = 0,NO3 = N*10, BC = (Ca+Mg+K)*10, SO4 = S*10, H2PO4 = P*10, 
+               Cl = Cl*10, Al = 0, RCOO = 0, HCO3 = 0, 
+               H=Cl+H2PO4+SO4+NO3+HCO3+RCOO-NH4-BC)
+      
+      site_upt <- site_upt %>% 
+        bind_rows(site_upt[rep(nrow(site_upt), nrow(df_out)-nrow(site_upt)),])
+      
+      dep_file <- gsub("vsdp.out", "QY.frt", file_loc)
+      CK_dep<- read.table(dep_file,  header = TRUE, encoding='UTF-8')
+      colnames(CK_dep) <- gsub("dep", "", colnames(CK_dep))
+      site_dep <- CK_dep %>% filter(X.year>=start_year) %>% 
+        mutate(Site=site_code, NH4 = NH3*10, NO3 = NOX*10, BC= (Ca+Mg+K)*10, 
+               SO4 = SOX*10, H2PO4 = P*10, Cl = Cl*10,
+               Al = 0, RCOO = 0, HCO3 = NH4 + BC - (Cl+H2PO4+SO4+NO3+RCOO), 
+               H=0)  # keq/ha
+      if(nrow(df_out)>nrow(site_dep)){
+        site_dep <- site_dep %>% 
+        bind_rows(site_dep[rep(nrow(site_dep), nrow(df_out)-nrow(site_dep)),])
+      } else{
+        site_dep <- site_dep[1:nrow(df_out),]
+      }
+      
+      site_dep$X.year <- site_upt$X.year <- df_out$X.time
+      
+      all_upt <- rbind(all_upt, site_upt) 
+      all_dep <- rbind(all_dep, site_dep)
+    } else{
+      print(paste0("Not same site in ", site_name, " ",file_loc))
+    }
+    
+  }
+  
+  all_out <- mutate(all_out, 
+                     X.cPO4=X.cH+X.cNH4+X.cBc+X.cNa+ X.cAl -X.cSO4-X.cNO3-X.cCl- X.cHCO3- X.cOrg)
+  
+  budget <- list(input=all_dep, uptake=all_upt, output=all_out)
+  return(budget)
+}
+
+acidity_budget <- function(budget, sce_name, year_range){
+  all_dep <- budget$input %>% filter(X.year %in% year_range)
+  all_upt <- budget$uptake %>% filter(X.year %in% year_range)
+  
+  all_dis <-  budget$output %>% filter(X.time %in% year_range) %>% 
+    dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, X.cNa, X.cCl, X.cAl,
+                  X.cHCO3, X.cPO4, X.cOrg ) %>% 
+    mutate(H = X.ps*X.cH*10, SO4 = X.ps*X.cSO4*10, NH4 = X.ps*X.cNH4*10, 
+           NO3=X.ps*X.cNO3*10, BC = X.ps*(X.cBc+X.cNa)*10, Cl = X.ps*X.cCl*10, 
+           Al= X.ps*X.cAl*10, HCO3 = X.ps*X.cHCO3*10, H2PO4 = X.ps*X.cPO4*10, 
+           RCOO=X.ps*X.cOrg*10) %>% 
+    dplyr::select(c(1:2,15:24)) %>% group_by(X.count)
+  
+  
+  name_acidity <- c( "Site","N transformation", "Net HCO3 leaching", "Net H input",
+                     "Crop removal", "Total H production", "S adsorption", "P adsorption",
+                     "BC release", "Al release", "Total H consumption")
+  
+  acidity <- data.frame(matrix(0, ncol=length(name_acidity), 
+                               nrow=length(unique(all_dis$X.count))))
+  colnames(acidity) <- name_acidity
+  
+  i=1
+  for (site_ID in unique(all_dis$X.count)){
+    acidity$Site[i] <- site_ID
+    acidity$crop_pat[i] <- soil_pro[soil_pro$ID==site_ID, "crop_pat"]
+    acidity$land_use[i] <- soil_pro[soil_pro$ID==site_ID, "land_use"]
+    
+    site_dep <-all_dep %>% filter(Site==site_ID) 
+    
+    site_upt <- all_upt %>% filter(Site==site_ID) 
+    
+    site_dis <- all_dis %>% filter(X.count==site_ID)
+    
+    acidity$`N transformation`[i] <- mean(site_dep$NH4 + site_dis$NO3 - site_dis$NH4 - site_dep$NO3) 
+    acidity$`Net HCO3 leaching`[i] <- mean(site_dis$HCO3 - site_dep$HCO3)
+    acidity$`Net H input`[i] <- mean(site_dep$H -site_dis$H) 
+    acidity$`Crop removal`[i] <- mean(site_upt$BC - site_upt$SO4 - site_upt$H2PO4)
+    acidity$`HCO3 leaching`[i] <- mean(site_dis$HCO3)
+    acidity$`HCO3 input`[i] <- mean(site_dep$HCO3)
+    
+    acidity$`S adsorption`[i] <- mean(site_dep$SO4 - site_upt$SO4 - site_dis$SO4)
+    acidity$`P adsorption`[i] <- mean(site_dep$H2PO4 - site_upt$H2PO4 - site_dis$H2PO4)
+    acidity$`BC release`[i] <- mean(site_dis$BC + site_upt$BC - site_dep$BC)
+    acidity$`Al release`[i] <- mean(site_dis$Al)
+    
+    i=i+1
+  }
+  
+  acidity <- mutate(acidity, scenario=sce_name,
+                    `Total H production`= `N transformation`+`Net HCO3 leaching`+`Net H input`+`Crop removal`, 
+                    `Total H consumption`= `S adsorption`+`P adsorption`+`BC release`+`Al release`)
+  
+  boxplot(acidity$`Total H production`- acidity$`Total H consumption`, main=sce_name)
+  
+  return(acidity)
+}
+
+BAUL_list <- read.csv("Inputs/BAUL/all_crop.csv")
+BNP_list <- read.csv("Inputs/BNP/all_crop.csv")
+BNR_list <- read.csv("Inputs/BNR/all_crop.csv")
+BNPR_list <- read.csv("Inputs/BNPR/all_crop.csv")
+
+
+````
+
+````{r}
+BAU_budget <- in_out_budget(BAU_list)
+
+BAUL_budget <- in_out_budget(BAUL_list)
+
+BNP_budget <- in_out_budget(BNP_list)
+
+BNR_budget <- in_out_budget(BNR_list)
+
+BNPR_budget <- in_out_budget(BNPR_list)
+
+ava_site <- unique(BNP_budget$output$X.count)
+all_BAU_pH <- BAU_budget$output %>% 
+  filter(X.time>=1985 & X.count %in% ava_site) %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+BAU_pH_group <- all_BAU_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+
+all_BAUL_pH <- BAUL_budget$output %>%
+  filter(X.time>=1985 & X.count %in% ava_site)  %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+BAUL_pH_group <- all_BAUL_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+all_BNP_pH <- BNP_budget$output %>% 
+  filter(X.time>=1985 & X.count %in% ava_site)  %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+BNP_pH_group <- all_BNP_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+all_BNR_pH <-  BNR_budget$output %>% 
+  filter(X.time>=1985 & X.count %in% ava_site)  %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+BNR_pH_group <- all_BNR_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+all_BNPR_pH <- BNPR_budget$output %>% 
+  filter(X.time>=1985 & X.count %in% ava_site)  %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+BNPR_pH_group <- all_BNPR_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+````
+
+```{r scenario_pH, echo=FALSE, fig.height=4, fig.width=10, dpi=300}
+
+mean_BAU <- filter(BAU_pH_group, q=="Mean value") %>% mutate(q="BAU")
+mean_BAUL <- filter(BAUL_pH_group, q=="Mean value") %>% mutate(q="BAUL")
+mean_BNP <- filter(BNP_pH_group, q=="Mean value" ) %>% mutate(q="BN")
+mean_BNR <- filter(BNR_pH_group, q=="Mean value") %>% mutate(q="BNR")
+mean_BNPR <- filter(BNPR_pH_group, q=="Mean value" ) %>% mutate(q="BNPR")
+
+scenario_pH <- rbind(mean_BAU, mean_BAUL, mean_BNP, mean_BNR, mean_BNPR) %>% 
+  mutate(manure_sce = ifelse(q %in% c("BNR", "BNPR"), "With enhanced manure", 
+                             "Without enahnced manure"))
+
+scenario_pH$q <- factor(scenario_pH$q, 
+                        levels = c("BNR","BNPR","BN", "BAUL","BAU"))
+ggplot(data=scenario_pH)+  
+  geom_line(aes(x=X.time, y=simulation, colour = factor(q)), 
+            linewidth=1.1)+ 
+  scale_colour_manual(name="Scenario",
+                      values = c('#1f77b4', '#d62728', '#2ca02c',
+                                 '#9467bd', "#ff7f0e"),
+                      breaks = c("BNR",  "BNPR", "BN", "BAUL","BAU"), 
+                      labels = c("BNR",  "BNPR", "BN", "BAUL","BAU"))+
+  facet_grid(cols = vars(land_use), rows = vars(manure_sce))+
+  scale_x_continuous(limits=c(1980, 2050), 
+                     breaks = c(1980, 1990, 2000, 2010, 2020, 2030, 2040, 2050))+
+  scale_y_continuous(limits=c(4.0, 8.0))+
+  ylab("Soil pH")+
+  xlab("Year")+
+  geom_vline(xintercept = 2019, color = "black", linetype = "dashed", linewidth=0.7) +
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        axis.title.y = element_text(margin = margin(r = 11, unit = "pt")), 
+        axis.title.x = element_text(margin = margin(r = 0, unit = "pt")),
+        text = element_text(size = 14, family="serif"))
+
+  
+ggplot(data=scenario_pH)+  
+  geom_line(aes(x=X.time, y=BS, colour = factor(q)), 
+            linewidth=1.1)+ 
+  scale_colour_manual(name="Scenario",
+                      values = c('#1f77b4', '#d62728', '#2ca02c',
+                                 '#9467bd', "#ff7f0e"),
+                      breaks = c("BNR",  "BNPR", "BN", "BAUL","BAU"), 
+                      labels = c("BNR",  "BNPR", "BN", "BAUL","BAU"))+
+  facet_grid(cols = vars(land_use), rows = vars(manure_sce))+
+  scale_x_continuous(limits=c(1980, 2050),
+                     breaks = c(1980, 1990, 2000, 2010, 2020, 2030, 2040, 2050))+
+  scale_y_continuous(limits=c(0, 100))+
+  ylab("Base saturation (%)")+
+  xlab("Year")+
+  geom_vline(xintercept = 2019, color = "black", linetype = "dashed", linewidth=0.7) +
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        axis.title.y = element_text(margin = margin(r = 11, unit = "pt")), 
+        axis.title.x = element_text(margin = margin(r = 11, unit = "pt")),
+        text = element_text(size = 14, family="serif"))
+
+# row(h1, h2, labels = c("(a)", "(b)"),  ncol=1, nrow=2,
+#           common.legend = TRUE, legend = "right")
+```
+# Calculate lime requirement to maintain soil pH  
+
+
+```{r, warning=FALSE}
+sce_lime <- function(land_use, year, sce_name, sce_noncal_soil){
+  ID_list <- read.csv(file.path("Inputs", sce_name, "all_crop.csv"))
+
+  if (land_use != "Paddy"){
+    start <- 1
+    end <- 52
+  } else{
+    start <- 53
+    end <- 69
+  }
+  
+  for (i in start:end){
+    # derive the site information
+    tar_site <- ID_list$Site[i]
+
+    dst_folder <- file.path("Inputs", sce_name, as.character(i))
+
+    fer_file <- read.table(pathJoin(dst_folder, "QY.frt"), 
+                      sep = "\t", header = TRUE, comment.char = "")
+    
+    req_lime <- sce_noncal_soil[sce_noncal_soil$ID==tar_site, "req_Ca"]
+
+    len_year <- 2051-1984+1
+    ext_line <- len_year - nrow(fer_file)
+    
+    if (ext_line>0){
+      fer_file[(nrow(fer_file)+1):(2051-1984+1), ] <- rep(fer_file[nrow(fer_file),], ext_line)
+      fer_file$X.year <- 1984:2051
+    }
+    
+    Ca_dep <- fer_file[fer_file$X.year==2020, "Cadep"] - non_cal_soil[non_cal_soil$ID== tar_site, "Ca_eq"]
+    
+    year_1 <- year
+    year_2 <- year_1 + year_1 - 2020 
+    year_3 <- year_2 + year_1 - 2020 
+    
+    if(year<=2030){
+      
+      fer_file[fer_file$X.year %in% c(year_1, year_2, year_3), "Cadep"] <- Ca_dep + round(req_lime, 2)
+      
+    } else if (year<=2035){
+      fer_file[fer_file$X.year %in% c(year_1, year_2), "Cadep"] <- Ca_dep + round(req_lime, 2)
+    } else{
+      fer_file[fer_file$X.year %in% c(year_1), "Cadep"] <- Ca_dep + round(req_lime, 2)
+    }
+    # len_year <- 2051-1984+1
+    # 
+    # if (nrow(fer_file)<len_year){
+    #     ext_line <- len_year - nrow(fer_file)
+    #     fer_file[(nrow(fer_file)+1):(2051-1984+1), ] <- rep(fer_file[nrow(fer_file),], ext_line)
+    #     fer_file$X.year <- 1984:2051
+    #     
+    #     Ca_dep <- fer_file[fer_file$X.year==2020, "Cadep"] - non_cal_soil[non_cal_soil$ID== tar_site, "Ca_eq"]
+    #     
+    #     fer_file[fer_file$X.year==year, "Cadep"] <- Ca_dep + round(req_lime, 2)
+    #     
+    # } 
+    colnames(fer_file)[1] <- "!year"
+    write.table(fer_file, pathJoin(dst_folder, "QY.frt"), sep="\t",
+                quote=FALSE, row.names = FALSE, qmethod = "double")
+  }
+}
+
+cri_year <- function(sce_name, all_sce_pH, sce_mean){
+  land <- "Upland"
+  j <- 2020
+  while (j <= 2050){
+    sim_pH <- round(sce_mean[sce_mean$X.time== j & sce_mean$land_use== land, "simulation"], 2)
+    if (sim_pH<5.5){
+      print(sce_mean[sce_mean$X.time== j & sce_mean$land_use== land,]$X.time)
+      
+      sim_sce_pH <- all_sce_pH %>% filter(X.time== j) %>% arrange(X.count) 
+
+      sce_noncal_soil <- non_cal_soil %>% 
+        mutate(sim_pH=ifelse(ID %in% sim_sce_pH$X.count, sim_sce_pH$X.pH, pH_19),
+               pH_gap = ifelse(sim_pH<6.0, 6.0-sim_pH, 0),
+               req_Ca = pH_gap * 0.44 * 0.2 * non_cal_soil$CEC * non_cal_soil$bulkdens)
+      
+      sce_lime(land, j, sce_name, sce_noncal_soil)
+      
+      if(land == "Upland"){
+        land <- "Paddy"
+        j <- 2020
+        } else{
+          break
+          }
+      } else{
+        j <- j + 1
+      }
+    }
+}
+
+cri_year("BAUL", all_BAUL_pH, mean_BAUL)
+
+cri_year("BNR",all_BNR_pH,mean_BNR)
+cri_year("BNPR",all_BNPR_pH,mean_BNPR)
+
+cri_year <- function(sce_name, all_sce_pH, sce_mean){
+  land <- "Upland"
+  j <- 2020
+  while (j <= 2050){
+    sim_pH <- round(sce_mean[sce_mean$X.time== j & sce_mean$land_use== land, "simulation"], 2)
+    if (sim_pH<5.5){
+      print(sce_mean[sce_mean$X.time== j & sce_mean$land_use== land,]$X.time)
+
+      sim_sce_pH <- all_sce_pH %>% filter(X.time== j) %>% arrange(X.count)
+
+      sce_noncal_soil <- non_cal_soil %>%
+        mutate(sim_pH=ifelse(ID %in% sim_sce_pH$X.count, sim_sce_pH$X.pH, pH_19),
+               pH_gap = ifelse(sim_pH<5.5, 6.0-sim_pH, 0),
+               req_Ca = pH_gap * 0.44 * 0.2 * non_cal_soil$CEC * non_cal_soil$bulkdens)
+
+      sce_lime(land, j, sce_name, sce_noncal_soil)
+
+      if(land == "Upland"){
+        land <- "Paddy"
+        j <- 2020
+        } else{
+          break
+          }
+      } else{
+        j <- j + 1
+      }
+    }
+}
+cri_year("BNP", all_BNP_pH, mean_BNP)
+
+
+```
+
+# Lime input
+
+```{r}
+BAU_lime <- past_lime <- 0
+sce_lime_req <- non_cal_soil[, c("ID","crop_pat","Ca_eq")] %>% arrange(ID)
+
+merge_sce_lime <- function(sce_budget, sce_name){
+  sce_lime_in <- sce_budget$input %>% dplyr::select(Site, X.year, Ca) %>% 
+  arrange(Site, X.year) %>% filter(X.year>2020)
+  for (site in unique(sce_lime_in$Site)) {
+    background <- sce_lime_in[sce_lime_in$Site==site & sce_lime_in$X.year==2021, "Ca"]
+    lime_amount <- sce_lime_in[sce_lime_in$Site==site, "Ca"] - background
+    sce_lime_req[sce_lime_req$ID==site, sce_name] <- sum(lime_amount)
+  }
+  return(sce_lime_req)
+}
+
+sce_lime_req <- merge_sce_lime(BAUL_budget, "BAUL")
+sce_lime_req <- merge_sce_lime(BNP_budget, "BN")
+sce_lime_req <- merge_sce_lime(BNR_budget, "BNR")
+sce_lime_req <- merge_sce_lime(BNPR_budget, "BNPR")
+
+sce_lime_sum <- sce_lime_req %>% 
+  filter(!is.na(BAUL)) %>% group_by(crop_pat) %>% 
+  summarise(BAUL = mean(Ca_eq) + mean(BAUL), 
+            BN = mean(Ca_eq) +mean(BN), 
+            BNR = mean(Ca_eq) +mean(BNR), 
+            BNPR = mean(Ca_eq) +mean(BNPR)) %>% as.data.frame() 
+
+sce_lime_gather <- gather(sce_lime_sum, scenario, lime_req, -crop_pat) %>% 
+  mutate(land_use = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  group_by(scenario, land_use) %>% 
+  summarise(process="Liming", mean= mean(lime_req)/30*10)
+
+BNR_lime_in <- BNR_budget$input %>% dplyr::select(Site, X.year, Ca) %>% 
+  arrange(Site, X.year) %>% filter(X.year>2020)
+
+BNPR_lime_in <- BNPR_budget$input %>% dplyr::select(Site, X.year, Ca) %>% 
+  arrange(Site, X.year) %>% filter(X.year>2020)
+```
+
+
+# ----acidity budget for scenarios-----------------
+
+```{r fig.height=4, fig.width=8}
+past_aci_budget <- acidity_budget(BAU_budget, "Past", 1985:2019)
+BAU_aci_budget <- acidity_budget(BAU_budget, "BAU", 2020:2050)
+BAUL_aci_budget <- acidity_budget(BAUL_budget, "BAUL", 2020:2050)
+BNP_aci_budget <- acidity_budget(BNP_budget, "BN", 2020:2050)
+BNR_aci_budget <- acidity_budget(BNR_budget, "BNR", 2020:2050)
+BNPR_aci_budget <- acidity_budget(BNPR_budget, "BNPR", 2020:2050)
+
+acidity_sum <- rbind(past_aci_budget, BAUL_aci_budget,
+                     BAU_aci_budget, BNP_aci_budget, 
+                     BNR_aci_budget, BNPR_aci_budget) %>% 
+  mutate(land_use = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  dplyr::select(-c(Site, crop_pat, contains("Total"))) %>% 
+  gather(process, amount, -c(land_use, scenario)) %>% 
+  filter(process %in% c("Crop removal", "N transformation", "HCO3 leaching", 
+                        "HCO3 input",  "P adsorption", 
+                        "Al release", "BC release")) %>% 
+  group_by_at(vars(scenario, land_use, process)) %>% 
+  summarise(mean=mean(amount)) %>% 
+  rbind(sce_lime_gather) %>% arrange(scenario)
+
+all_HCO3 <- acidity_sum$scenario %in% unique(sce_lime_gather$scenario) & acidity_sum$process == "HCO3 input"
+all_lime <- acidity_sum$scenario %in% unique(sce_lime_gather$scenario) & acidity_sum$process == "Liming"
+
+acidity_sum[all_HCO3, "mean"] <- 
+  acidity_sum[all_HCO3, "mean"] - acidity_sum[all_lime, "mean"]
+
+
+# acidity_sum_gr <- acidity_sum %>% group_by(scenario, land_use) %>% 
+#   summarise(n=n(), AR=sum(mean)/2*50)
+
+minus_para <- c("S adsorption", "P adsorption", "BC release", "Al release", "HCO3 input", "Liming")
+acidity_sum[acidity_sum$process %in% minus_para, "mean"] <- 
+  -acidity_sum[acidity_sum$process %in% minus_para, "mean"]
+
+acidity_sum <- arrange(acidity_sum, mean)
+summary(acidity_sum)
+
+data_check <- acidity_sum %>% group_by_at(vars(scenario, land_use)) %>% 
+  summarise(mean=sum(mean))
+summary(data_check)
+
+acidity_sum$process <- factor(acidity_sum$process, 
+                              levels=c("Crop removal", "N transformation", 
+                                       "HCO3 leaching", "P adsorption", 
+                                       "Al release", "BC release", 
+                                      "Liming","HCO3 input"))
+acidity_sum$scenario <- factor(acidity_sum$scenario, 
+                               levels=c("Past", "BAU","BAUL", "BN", "BNR","BNPR"))
+
+ggplot(acidity_sum, aes(scenario, mean, fill=process))+
+  geom_bar(stat='identity', color="black", width=0.5)+
+  theme_bw()+
+  facet_wrap(~factor(land_use))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 12, family="serif"))+
+  scale_fill_manual(name="Process",                     
+                    values = c('#DC0000B2','#F3D266', '#96C37D','#8491B4B2',
+                               "#00A087B2", '#2F7FC1', '#C497B2',"#7E6148B2"),
+                    breaks = c("Crop removal",  "N transformation", 
+                               "HCO3 leaching", 
+                               "HCO3 input", "Liming",  
+                               "BC release",  "Al release", "P adsorption"), 
+                    labels = c("Crop removal",  "N transformations", 
+                               "HCO3 leaching", 
+                               "HCO3 input", "Liming", 
+                               "BC release",  "Al release", "P adsorption"))+
+  scale_y_continuous(limits=c(-20, 20), 
+                     breaks = c(-20, -15, -10, -5, 0, 5, 10, 15, 20), 
+                     labels = c("-20", "-15", "-10", "-5", "0", "5", "10", "15","20"))+
+  geom_hline(yintercept = 0, color = "black")+
+  xlab("") +
+  ylab("H production (keq/ha/yr)")
+```
+#
+
+```{r}
+#-----------------pH and BS trend of calcareous soils--------------------------
+cal_soil_BAU <- in_out_budget(cal_BAU)
+cal_soil_BNPR <- in_out_budget(cal_BNPR)
+
+all_cal_pH <- cal_soil_BAU$output %>% filter(X.time>1984) %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% 
+                           soil_pro[soil_pro$crop_pat=="Paddy", "ID"], 
+                         "Paddy", "Upland"))
+
+cal_pH_group <- all_cal_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+all_cal_obs <- soil_pro %>% filter(soil_type=="Calcareous") %>% 
+  dplyr::select(c("ID", "crop_pat", "pH_85","pH_14", "pH_19")) %>% 
+  mutate(land_use = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  arrange(ID)
+colnames(all_cal_obs)[3:5] <- c(1985, 2014, 2019)
+cal_obs_gather <- gather(all_cal_obs[,-1], source, observation, -c(land_use, crop_pat)) 
+cal_obs_gather$source <- as.numeric(cal_obs_gather$source)
+# 
+# cal_pH_group$obs_max <- cal_pH_group$obs_min <- cal_pH_group$obs_sd <- cal_pH_group$obs_mean <- rep(NA, nrow(cal_pH_group))
+
+cal_pH_group$q <- factor(cal_pH_group$q, levels = c("95th percentile", "Mean value", "50th percentile", "5th percentile"))
+
+ggplot(data=cal_obs_gather)+  
+  geom_boxplot(data=cal_obs_gather, 
+               mapping=aes(source, observation, group=source, fill=factor(source)), 
+               width=1.0, outlier.shape = NA)+
+  stat_summary(data=cal_obs_gather, mapping=aes(source, observation, group=source), 
+               fun = "mean", geom = "point", shape = 24, 
+               size = 1, fill = "red")+
+  geom_line(data=cal_pH_group, mapping=aes(x=X.time, y=simulation, 
+                                           linetype=factor(q), 
+                                           colour = factor(q)), 
+            linewidth=1.0)+
+  scale_linetype_manual(name="Simulation", values = c(2, 5, 1, 3))+ #?????????????????????
+  scale_color_lancet(name="Simulation")+
+  scale_fill_brewer(name="Observation", palette="Spectral")+
+  facet_wrap(~land_use)+
+  scale_x_continuous(limits=c(1984, 2051))+
+  ylab("Soil pH")+
+  xlab("Year")+
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.2, 'cm'), 
+        axis.title.y = element_text(margin = margin(r = 11, unit = "pt")), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+
+BNPR_cal_pH <- cal_soil_BNPR$output %>% filter(X.time>1984) %>% 
+  dplyr::select(c("X.count", "X.time","X.pH", "X.bsat")) %>% 
+  mutate(land_use=ifelse(X.count %in% 
+                           soil_pro[soil_pro$land_use=="Upland", "ID"], 
+                         "Upland", "Paddy"))
+
+cal_pH_group <- BNPR_cal_pH %>% group_by_at(vars(land_use, X.time)) %>% 
+  summarise(n=n(), simulation=c(mean(X.pH), quantile(X.pH, c(0.05, 0.5, 0.95))),
+            BS = c(mean(X.bsat*100), quantile(X.bsat*100, c(0.05, 0.5, 0.95))),
+            q = c("Mean value","5th percentile", "50th percentile", "95th percentile")) %>% 
+  arrange(land_use)
+
+ggplot()+  
+  geom_line(data=cal_pH_group, mapping=aes(x=X.time, y=simulation, 
+                                           linetype=factor(q), 
+                                           colour = factor(q)), 
+            linewidth=1.0)+
+  scale_linetype_manual(name="Simulation", values = c(2, 5, 1, 3))+ #?????????????????????
+  scale_color_lancet(name="Simulation")+
+  facet_wrap(~land_use)+
+  scale_x_continuous(limits=c(2020, 2051))+
+  ylab("Soil pH")+
+  xlab("Year")+
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.2, 'cm'), 
+        axis.title.y = element_text(margin = margin(r = 11, unit = "pt")), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+
+
+save(BNPR_NH3, BNPR_fer, BNPR_man, BNPR_crop, BAU_budget, BAUL_budget, BNPR_budget, cal_soil_BAU, cal_soil_BNPR, file = "1_program/scenario_budget.Rdata")
+
+```
+
+#-----------------acidity budget for calcareous soils-----------------
+
+```{r fig.height=4.5, fig.width=10, dpi = 600}
+cal_aci_budget <- acidity_budget(cal_soil_BAU, "Cal_soil", 1985:2050) %>% 
+  arrange(Site)
+
+summary(cal_aci_budget)
+
+cal_aci_gather <- cal_aci_budget %>% 
+  gather(process, mean, -crop_pat) %>% 
+  filter(process %in% c("Crop removal", "N transformation", "HCO3 leaching", 
+                        "HCO3 input", "S adsorption", "P adsorption", 
+                        "Al release", "BC release"))%>% 
+  group_by(crop_pat, process) %>% 
+  mutate(land_use = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  as.data.frame()
+
+# Assuming 'amount' is your response variable
+model_paady <- aov(mean ~ process, data = cal_aci_gather %>% 
+                     filter(land_use=="Paddy"))
+anova_results <- tidy(model_paady, conf.int = TRUE)
+
+# If you find a significant result in the ANOVA
+# You can then perform pairwise comparisons
+pairwise_results <- TukeyHSD(model_paady)
+
+# Display the ANOVA results
+print(anova_results)
+
+# Display pairwise comparison results
+print(pairwise_results)
+
+model_upland <- aov(mean ~ process, data = cal_aci_gather %>% 
+                     filter(land_use!="Paddy"))
+anova_results <- tidy(model_upland, conf.int = TRUE)
+
+# If you find a significant result in the ANOVA
+# You can then perform pairwise comparisons
+pairwise_results <- TukeyHSD(model_upland)
+
+# Display the ANOVA results
+print(anova_results)
+
+# Display pairwise comparison results
+print(pairwise_results)
+
+ggplot(cal_aci_budget)+
+  geom_boxplot(aes(`Total H production`- `Total H consumption`))
+
+cal_aci_BNPR <- acidity_budget(cal_soil_BNPR, "Cal_soil_BNPR", 1985:2050) %>% 
+  arrange(Site)
+
+mean_acidity <- rbind(cal_aci_budget, cal_aci_BNPR) %>% 
+  mutate(land_use = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  dplyr::select(-c(Site, crop_pat, contains("Total"))) %>% 
+  gather(process, amount, -c(land_use, scenario))%>% 
+  filter(process %in% c("Crop removal", "N transformation", "HCO3 leaching", 
+                        "HCO3 input",  "P adsorption", "S adsorption", "Al release",
+                        "BC release")) %>% 
+  group_by_at(vars(land_use, process, scenario)) %>% 
+  summarise(mean=mean(amount), sd=sd(amount))
+
+summary(mean_acidity)
+
+minus_para <- c("HCO3 input", "S adsorption", "P adsorption", "BC release", "Al release")
+mean_acidity$type <- ifelse(mean_acidity$process %in% minus_para, 
+                            "Consumption", "Production")
+
+mean_acidity$type <- factor(mean_acidity$type, 
+                            levels=c("Production", "Consumption"))
+
+mean_acidity$process<- factor(mean_acidity$process, 
+                              levels=c( "HCO3 leaching", "N transformation",
+                                        "Crop removal", "HCO3 input",
+                                        "BC release",  "P adsorption",
+                                        "S adsorption", "Al release"))
+
+mean_acidity <- arrange(mean_acidity, scenario, land_use, process)
+
+mean_acidity$letter <- c("a", "b", "c", "b", "a", "c", "c", "c", 
+                        "a", "b", "c", "b", "a", "c", "c", "c",
+                        "a", "b", "c", "b", "a", "c", "c", "c", 
+                        "a", "b", "c", "b", "a", "c", "c", "c")
+
+ggplot(filter(mean_acidity, scenario=="Cal_soil"),
+       aes(land_use, mean, fill=process))+
+  geom_bar(stat='identity', position = position_dodge(0.9), 
+           color="black", width=0.6)+
+  geom_errorbar(data = filter(mean_acidity, scenario=="Cal_soil"), 
+                aes(ymin = mean - sd/mean, 
+                    ymax = mean + sd/mean),
+                width = 0.2, position = position_dodge(0.9))+
+  geom_text(aes(label = letter, y = 40),
+            position = position_dodge(0.9), size = 4) +
+  facet_wrap(~factor(type))+
+  scale_fill_manual(name="Process",                     
+                    values = c('#96C37D', '#F3D266', '#DC0000B2',
+                               '#8491B4B2', '#2F7FC1', '#91D1C2B2', 
+                               '#C497B2',"#7E6148B2"),                   
+                    breaks=c( "HCO3 leaching", "N transformation",
+                              "Crop removal", "HCO3 input",
+                              "BC release", "Al release",  "P adsorption",
+                              "S adsorption"), 
+                    labels=c( "HCO3 leaching", "N transformations",
+                              "Crop removal", "HCO3 input",
+                              "BC release", "Al release",  "P adsorption",
+                              "S adsorption"))+
+  theme_bw()+
+  xlab("Land use")+
+  ylab("H flux (keq/ha/yr)")+
+  scale_y_continuous(limits=c(-5, 40))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14, family="serif"),
+        panel.spacing = unit(1.0, "lines"))
+
+ggsave(filename = "0_Paper3_1_submission/Revisions/Fig5b.jpg", # 保存的文件名称。通过后缀来决定生成什么格式的图片
+  width = 10,             # 宽
+  height = 4.5,            # 高
+  units = "in",          # 单位
+  dpi = 300              # 分辨率DPI
+)
+
+
+
+ggplot(filter(mean_acidity, scenario!="Cal_soil"),
+       aes(land_use, mean, fill=process))+
+  geom_bar(stat='identity', position = position_dodge(0.9), 
+           color="black", width=0.6)+
+  geom_errorbar(data = filter(mean_acidity, scenario!="Cal_soil"), 
+                aes(ymin = mean - sd/mean, 
+                    ymax = mean + sd/mean),
+                width = 0.2, position = position_dodge(0.9))+
+  facet_wrap(~factor(type))+
+  scale_fill_manual(name="Process",                     
+                    values = c('#96C37D', '#F3D266', '#DC0000B2',
+                               '#8491B4B2', '#2F7FC1', '#91D1C2B2', 
+                               '#C497B2',"#7E6148B2"),                   
+                    breaks=c( "HCO3 leaching", "N transformation",
+                              "Crop removal", "HCO3 input",
+                              "BC release", "Al release",  "P adsorption",
+                              "S adsorption"), 
+                    labels=c( "HCO3 leaching", "N transformations",
+                              "Crop removal", "HCO3 input",
+                              "BC release", "Al release",  "P adsorption",
+                              "S adsorption"))+
+  theme_bw()+
+  xlab("Land use")+
+  ylab("H flux (keq/ha/yr)")+
+  scale_y_continuous(limits=c(-5, 40))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14, family="serif"),
+        panel.spacing = unit(1.0, "lines"))
+```
+# 
+
+```{r}
+# ava_sites <- soil_pro$ID
+site_trend <- function(all_scenario_pH, all_aci_budget){
+  site_pH <- all_scenario_pH %>% ungroup() %>% 
+    filter(X.time %in% 2020:2050 & X.count %in% ava_site) %>% group_by(X.count) %>% 
+    summarise(scenario_pH = mean(X.pH), scenario_BS = mean(X.bsat)*100) %>% 
+    arrange(X.count) 
+  
+  site_aci <- all_aci_budget %>% 
+    filter(Site %in% site_pH$X.count) %>% arrange(Site) 
+  
+  site_trend <- site_pH %>% 
+    mutate(tot_H = site_aci$`Total H production`, 
+           land_use = site_aci$land_use) %>% 
+    as.data.frame()
+  
+  return(site_trend)
+}
+
+BAU_all_site <- rbind(site_trend(all_cal_pH, cal_aci_budget), 
+                      site_trend(all_BAU_pH, BAU_aci_budget)) %>% 
+  arrange(X.count) 
+
+BNPR_all_site <- rbind(site_trend(BNPR_cal_pH, cal_aci_BNPR ), 
+                       site_trend(all_BNPR_pH, BNPR_aci_budget))%>% 
+  arrange(X.count)
+
+colnames(BAU_all_site)[1] <- colnames(BNPR_all_site)[1] <- "Site"
+
+sce_acidity <- rbind(cal_aci_budget, cal_aci_BNPR,
+                     BAU_aci_budget, BNP_aci_budget, 
+                     BNR_aci_budget, BNPR_aci_budget) %>% 
+  dplyr::select(Site, crop_pat, scenario, `BC release`,`Total H production`) %>% 
+  arrange(Site)
+```
+
+# Scenario analysis for nutrient budget
+
+```{r}
+upland <- filter(non_cal_soil, crop_pat !="Paddy") %>% arrange(ID)
+
+rice <- filter(non_cal_soil, crop_pat =="Paddy") %>% arrange(ID)
+
+# Fertilizer and manure
+past_fer <- cur_fer_in %>% filter(Year %in% 1985:2019, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6, scenario="Past", Flux = "Fertilizer", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BAU_fer <- cur_fer_in %>% filter(Year == 2019, Site %in% ava_site) %>%  
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(), scenario="BAU", Flux = "Fertilizer", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10) 
+
+BAUL_fer <- BAU_fer%>% mutate(scenario="BAUL")
+
+BNP_min_fer <- BNP_fer %>% filter(Year == 2020, Site %in% ava_site) %>%  
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BN", Flux = "Fertilizer", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BNR_min_fer <- BNR_fer %>% filter(Year == 2020, Site %in% ava_site) %>%  
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNR", Flux = "Fertilizer", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BNPR_min_fer <- BNPR_fer %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNPR", Flux = "Fertilizer", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+past_man <- cur_man_in %>% filter(Year %in% 1985:2019, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6,scenario="Past", Flux = "Manure", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BAU_org_man <- cur_man_in %>% filter(Year == 2019, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BAU", Flux = "Manure", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BAUL_org_man <- BAU_org_man%>% mutate(scenario="BAUL")
+
+BNP_org_man <- BNP_man %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BN", Flux = "Manure", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BNR_org_man <- BNR_man %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNR", Flux = "Manure", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BNPR_org_man <- BNPR_man %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=0, RCOO=0, HCO3=NH4+BC+H-(Cl+P+S+NO3+RCOO)) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNPR", Flux = "Manure", 
+            NH4 = mean(NH4)*10, NO3 = mean(NO3)*10, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+# Atmospheric deposition
+dep <- read.table(pathJoin("Inputs/S_upland", "002308.dpy"), 
+                  sep = "\t", header = TRUE, comment.char = "") 
+dep[37,] <- dep[36,]
+
+dep$X.year[37] <- 2020; rownames(dep) <- NULL
+colnames(dep) <- gsub("dep", "", colnames(dep))
+
+past_dep <- dep %>% filter(X.year %in% 1985:2019) %>% 
+  mutate(land_use="County", BC = Ca+Mg+K, Al=0, H=10^(-5.6)* 1300*10, 
+         RCOO=0, HCO3=NH3+BC+H-(Cl+P+SOX+NOX+RCOO)) %>% group_by(land_use) %>% 
+  summarise(n=n()/6,scenario="Past", Flux = "Deposition", 
+            NH4 = mean(NH3)*10, NO3 = mean(NOX)*10, 
+            SO4=mean(SOX)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+past_dep <- rbind(past_dep, past_dep)
+past_dep$land_use <- c("Paddy", "Upland")
+
+future_dep <-  dep %>% filter(X.year %in% 2020) %>% 
+  mutate(land_use="County", BC = Ca+Mg+K, Al=0, H=10^(-5.6)* 1300*10, 
+         RCOO=0, HCO3=NH3+BC+H-(Cl+P+SOX+NOX+RCOO)) %>% group_by(land_use) %>% 
+  summarise(n=n(),scenario="Past", Flux = "Deposition", 
+            NH4 = mean(NH3)*10, NO3 = mean(NOX)*10, 
+            SO4=mean(SOX)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+future_dep <- rbind(future_dep, future_dep[rep(1, 9), ])
+future_dep$land_use <- c(rep("Paddy", 5), rep("Upland", 5))
+future_dep$scenario<- rep(c("BAU", "BAUL", "BN", "BNR","BNPR"), 2)
+
+# N fixation
+future_Nfix <- past_Nfix <- crop_Nfix %>% 
+  dplyr::select(ID, Nfix) %>% 
+  filter(ID %in% ava_site) %>% 
+  mutate(land_use=ifelse(ID %in% soil_pro[soil_pro$crop_pat=="Paddy",]$ID, 
+                         "Paddy", "Upland")) %>% 
+  dplyr::group_by(land_use) %>% 
+  dplyr::summarise(n=n(), scenario="Past", Flux = "N fixation", N=mean(Nfix)*10)
+
+future_Nfix <- rbind(future_Nfix, future_Nfix[rep(1:2, 4), ]) %>% arrange(land_use)
+future_Nfix$scenario <- rep(c("BAU", "BAUL","BN", "BNR", "BNPR"), 2)
+
+# Uptake
+past_upt <- tot_crop_removal %>% filter(Year %in% 1985:2019, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=(Cl+P+S)-BC-N, RCOO=0, HCO3=0) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6,scenario="Past", Flux = "Uptake", 
+            NH4 = mean(N)*10, NO3 = 0, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BAU_upt <- tot_crop_removal %>% filter(Year == 2019, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=(Cl+P+S)-BC-N, RCOO=0, HCO3=0) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BAU", Flux = "Uptake", 
+            NH4 = mean(N)*10, NO3 = 0, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+BAUL_upt <-BAU_upt %>% mutate(scenario="BAUL")
+
+BNP_upt <- BAU_upt %>% mutate(scenario="BN")
+
+BNR_upt <- BNR_crop %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=(Cl+P+S)-BC-N, RCOO=0, HCO3=0) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNR", Flux = "Uptake",
+            NH4 = mean(N)*10, NO3 = 0, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+  
+BNPR_upt <- BNPR_crop %>% filter(Year == 2020, Site %in% ava_site) %>% 
+  mutate(BC = Ca+Mg+K, Al=0, H=(Cl+P+S)-BC-N, RCOO=0, HCO3=0) %>% 
+  filter(Site %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNPR", Flux = "Uptake",
+            NH4 = mean(N)*10, NO3 = 0, 
+            SO4=mean(S)*10, H2PO4=mean(P)*10, Cl=mean(Cl)*10, 
+            BC = mean(BC)*10, Al = mean(Al)*10, 
+            RCOO = mean(RCOO)*10, HCO3 = mean(HCO3)*10, H = mean(H)*10)
+
+# NH3 emission
+past_cum_NH3 <- cur_NH3 %>% 
+  filter(Site %in% non_cal_soil$ID & Year>1984 ) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6, scenario="Past", Flux = "NH3 emission", 
+            N=mean(N*cum_NH3)*10)
+  
+BAU_cum_NH3 <- cur_NH3 %>% 
+  filter(Site %in% non_cal_soil$ID & Year==2019) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BAU", Flux = "NH3 emission", 
+            N=mean(N*cum_NH3)*10)
+BAUL_cum_NH3 <- BAU_cum_NH3 %>% mutate(scenario="BAUL")
+
+BNP_cum_NH3 <- BNP_NH3 %>% 
+  filter(Site %in% non_cal_soil$ID & Year==2020) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BN", Flux = "NH3 emission", 
+            N=mean(N*cum_NH3)*10)
+
+BNR_cum_NH3 <- BNR_NH3 %>% 
+  filter(Site %in% non_cal_soil$ID & Year==2020) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNR", Flux = "NH3 emission", 
+            N=mean(N*cum_NH3)*10)
+
+BNPR_cum_NH3 <- BNPR_NH3 %>% 
+  filter(Site %in% non_cal_soil$ID & Year==2020) %>% 
+  mutate(land_use=ifelse(Site %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n(),scenario="BNPR", Flux = "NH3 emission", 
+            N=mean(N*cum_NH3)*10)
+
+# Denitrification
+past_denit <- BAU_budget$output %>% filter(X.time %in% 1985:2019) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6,scenario="Past", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+BAU_denit <- BAU_budget$output %>% filter(X.time >= 2020) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BAU", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+BAUL_denit <- BAUL_budget$output %>% filter(X.time >= 2020) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BAUL", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+BNP_denit <- BNP_budget$output %>% filter(X.time >= 2020) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BN", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+BNR_denit <- BNR_budget$output %>% filter(X.time >= 2020) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BNR", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+BNPR_denit <- BNPR_budget$output %>% filter(X.time >= 2020) %>% 
+  dplyr::select(X.count, X.time, X.Nde, X.Nlf) %>%
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BNPR", Flux = "Denitrification", 
+            N=mean(X.Nde)*10, Nlf=mean(X.Nlf)/14*10)
+
+# Leaching
+past_dis <- BAU_budget$output %>% 
+  filter(X.time %in% 1985:2019,X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/6,scenario="Past", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10)
+
+BAU_dis <- BAU_budget$output %>% 
+  filter(X.time >=2020, X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BAU", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10)  
+
+BAUL_dis <- BAUL_budget$output %>% 
+  filter(X.time >=2020, X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BAUL", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10) 
+
+BNP_dis <- BNP_budget$output %>% 
+  filter(X.time >=2020, X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BN", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10) 
+
+BNR_dis <- BNR_budget$output %>% 
+  filter(X.time >=2020, X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BNR", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10) 
+
+BNPR_dis <- BNPR_budget$output %>% 
+  filter(X.time >=2020, X.count %in% ava_site) %>% 
+  dplyr::select(X.count, X.time, X.ps, X.cH, X.cSO4, X.cNO3, X.cNH4, X.cBc, 
+         X.cNa, X.cCl, X.cAl, X.cHCO3, X.cPO4, X.cOrg) %>%
+  filter(X.count %in% non_cal_soil$ID) %>% 
+  mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+  group_by(land_use) %>% 
+  summarise(n=n()/31,scenario="BNPR", Flux = "Leaching", 
+            NH4 = mean(X.ps*X.cNH4)*10, NO3 = mean(X.ps*X.cNO3)*10, 
+            SO4=mean(X.ps*X.cSO4)*10, H2PO4=mean(X.ps*X.cPO4)*10, 
+            Cl=mean(X.ps*X.cCl)*10, BC = mean(X.ps*X.cBc)*10, 
+            Al = mean(X.ps*X.cAl)*10, RCOO = mean(X.ps*X.cOrg)*10, 
+            HCO3 = mean(X.ps*X.cHCO3)*10, H = mean(X.ps*X.cH)*10) 
+# past_Bcwe <- BAU_budget$output %>% 
+#   filter(X.time %in% 2014:2019 & X.count %in% non_cal_soil$ID & X.count %in% sites) %>% 
+#   mutate(land_use=ifelse(X.count %in% upland$ID, "Upland", "Paddy")) %>% 
+#   group_by(land_use) %>% 
+#   summarise(n=n()/6, scenario="Past", Flux = "Soil weathering", 
+#             BC=mean(X.Bcwe)*10)
+# 
+# future_Bcwe <- rbind(past_Bcwe, past_Bcwe[rep(1:2, 3), ]) %>% arrange(land_use)
+# future_Bcwe$scenario <- rep(c("BAU", "BN", "BNR", "BNPR"), 2)
+```
+
+```{r fig.height=5, fig.width=10}
+scenario_nut_budget <- plyr::rbind.fill(future_dep, future_Nfix,
+                                        BAU_cum_NH3, BAUL_cum_NH3, 
+                                        BNP_cum_NH3, BNR_cum_NH3, BNPR_cum_NH3, 
+                                        BAU_denit, BAUL_denit, 
+                                        BNP_denit, BNR_denit, BNPR_denit,
+                                        BAU_fer, BAU_org_man, BAU_upt, BAU_dis,
+                                        BNP_min_fer, BNP_org_man, BNP_upt, BNP_dis,
+                                        BNR_min_fer, BNR_org_man, BNR_upt, BNR_dis,
+                                        BNPR_min_fer, BNPR_org_man, BNPR_upt, BNPR_dis, 
+                                        BAUL_fer, BAUL_org_man, BAUL_upt, BAUL_dis)
+
+scenario_N_denit <- scenario_nut_budget %>% filter(Flux  == "Denitrification") 
+scenario_N_leaching <- scenario_nut_budget %>% filter(Flux  == "Leaching") %>% 
+  mutate(N=NH4+NO3, 
+         Nlf=scenario_N_denit$Nlf*N/(N+scenario_N_denit$N), 
+         N = N-Nlf) 
+  
+scenario_N_denit$N <- scenario_N_denit$N - (scenario_N_denit$Nlf - scenario_N_leaching$Nlf)
+
+cor_scenario_nut_budget <- scenario_nut_budget %>% 
+  filter(!Flux %in% c("Leaching", "Denitrification")) %>% 
+  rbind(scenario_N_denit, scenario_N_leaching) %>% 
+  dplyr::select(-Nlf)
+
+cor_scenario_nut_budget[is.na(cor_scenario_nut_budget$N), "N"] <- 
+  cor_scenario_nut_budget[is.na(cor_scenario_nut_budget$N), "NO3"] + cor_scenario_nut_budget[is.na(cor_scenario_nut_budget$N), "NH4"]
+
+minus_para <- c("Uptake", "Leaching", "Denitrification", "NH3 emission")
+
+cor_scenario_nut_budget[cor_scenario_nut_budget$Flux %in% minus_para, -c(1, 2, 3, 4) ] <- 
+  -cor_scenario_nut_budget[cor_scenario_nut_budget$Flux %in% minus_para, -c(1, 2, 3, 4)]
+
+scenario_N_acc <- cor_scenario_nut_budget %>% 
+  dplyr::select(scenario, land_use, N) %>% 
+  ungroup() %>% group_by(scenario, land_use) %>% 
+  summarise(N=-sum(N), Flux="Accumulation")
+
+head(cor_scenario_nut_budget)
+
+scenario_other_nut_acc <- cor_scenario_nut_budget %>% na.omit() %>% 
+  group_by(scenario, land_use) %>% 
+  summarise(Flux = "Accumulation", SO4 = -sum(SO4), H2PO4 = -sum(H2PO4), Cl=-sum(Cl), 
+            BC = -sum(BC), Al = -sum(Al), RCOO = -sum(RCOO), HCO3 = -sum(HCO3), 
+            H = -sum(H))
+
+sce_lime_in <- scenario_other_nut_acc %>% 
+  mutate(Flux = "Lime", SO4 = 0, H2PO4 = 0, Cl=0, 
+            BC = 0, Al = 0, RCOO = 0, HCO3 = 0, 
+            H = 0)
+
+for (land in unique(sce_lime_in$land_use)){
+
+  for (scen in unique(sce_lime_in$scenario)){
+
+    if (scen %in% sce_lime_gather$scenario){
+      tar_sce_lime <- sce_lime_gather[sce_lime_gather$land_use==land & sce_lime_gather$scenario==scen, "mean"]
+      
+      sce_lime_in[sce_lime_in$Flux=="Lime" &  sce_lime_in$land_use==land & sce_lime_in$scenario==scen, "HCO3"] <- sce_lime_in[sce_lime_in$Flux=="Lime"&  sce_lime_in$land_use==land & sce_lime_in$scenario==scen, "BC"] <- tar_sce_lime
+
+    } 
+    
+  }
+  
+}
+
+scenario_other_nut_acc[,4:11] <- scenario_other_nut_acc[,4:11] - sce_lime_in[,4:11] 
+
+all_scenario_nut_budget <-  plyr::rbind.fill(cor_scenario_nut_budget, 
+                                             scenario_N_acc, 
+                                             scenario_other_nut_acc, 
+                                             past_nut_budget, 
+                                             sce_lime_in)
+
+all_scenario_nut_budget$Flux <- factor(all_scenario_nut_budget$Flux,
+                              levels = c("N fixation", "Deposition", 
+                                        "Manure", "Fertilizer", "Lime", "Accumulation", 
+                                        "Leaching", "Denitrification",
+                                        "NH3 emission", "Uptake"))
+
+all_scenario_nut_budget$scenario <- factor(all_scenario_nut_budget$scenario,
+                              levels = c("Past", "BAU", 
+                                        "BAUL", "BN", "BNR", "BNPR"))
+
+scenario_N_summary <- all_scenario_nut_budget %>% 
+  group_by(Flux, land_use) %>% 
+  summarise(NH4 = mean(NH4), NO3 = mean(NO3), N = mean(N))
+
+```
+
+```{r echo=FALSE, fig.height=4.5, fig.width=10, dpi=600}
+ggplot(all_scenario_nut_budget, aes(scenario, N, fill=factor(Flux)))+
+  geom_bar(stat='identity', color="black", width=0.5)+
+  theme_bw()+
+  facet_wrap(~factor(land_use))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        panel.spacing = unit(1.5, "lines"), 
+        text = element_text(size = 14, family="serif"))+
+  scale_fill_brewer(name="Flux",                     
+                    palette = "Spectral", breaks=c( "N fixation", "Deposition",
+                                                    "Manure",  "Fertilizer",
+                                                    "Uptake", "NH3 emission",
+                                                    "Denitrification","Leaching", 
+                                                    "Accumulation"))+
+  scale_y_continuous(limits=c(-30, 30), breaks = c(-30, -20, -10, 0, 10,20, 30))+
+  ggtitle("(a)")+
+  ylab("N (keq/ha/yr)")+
+  xlab("")+
+  geom_abline(intercept = 0, slope = 0, color = "black")
+
+ggplot(all_scenario_nut_budget, aes(scenario, H2PO4, fill=factor(Flux)))+
+  geom_bar(stat='identity', color="black", width=0.5)+
+  theme_bw()+
+  facet_wrap(~factor(land_use))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        panel.spacing = unit(1.5, "lines"), 
+        text = element_text(size = 14, family="serif"))+
+  scale_fill_brewer(name="Flux",                     
+                    palette = "Spectral", breaks=c("Deposition",
+                                                   "Manure",  "Fertilizer", 
+                                                   "Uptake", "Leaching", "Accumulation"))+
+  scale_y_continuous(limits=c(-3, 3))+
+  ggtitle("(b)")+
+  ylab("P (keq/ha/yr)")+
+  xlab("")+
+  geom_abline(intercept = 0, slope = 0, color = "black")
+
+ggplot(all_scenario_nut_budget, aes(scenario, BC, fill=factor(Flux)))+
+  geom_bar(stat='identity', color="black", width=0.5)+
+  theme_bw()+
+  facet_wrap(~factor(land_use))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        panel.spacing = unit(1.5, "lines"), 
+        text = element_text(size = 14, family="serif"))+
+  scale_fill_brewer(name="Flux",                     
+                    palette = "Spectral", breaks=c("Deposition",
+                                                   "Manure",  "Fertilizer", "Soil weathering", "Lime", "Uptake", "Leaching", "Accumulation"))+
+  scale_y_continuous(limits=c(-30, 30))+
+  ggtitle("(c)")+
+  xlab("") +
+  ylab("BC (keq/ha/yr)")+
+  geom_abline(intercept = 0, slope = 0, color = "black")
+
+ggplot(all_scenario_nut_budget, aes(scenario, HCO3, 
+                           fill=factor(Flux)))+
+  geom_bar(stat='identity', color="black", width=0.5)+
+  theme_bw()+
+  facet_wrap(~factor(land_use))+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        panel.spacing = unit(1.5, "lines"), 
+        text = element_text(size = 14, family="serif"))+
+  scale_fill_brewer(name="Flux",                     
+                    palette = "Spectral", breaks=c("Deposition",
+                                                   "Manure",  "Fertilizer", "Lime",
+                                                   "Uptake", "Leaching", 
+                                                   "Accumulation"), 
+                    labels = c("Deposition","Manure",  "Fertilizer", "Lime", "Uptake", "Leaching", "Net input"))+
+  scale_y_continuous(limits=c(-20, 20))+
+  ggtitle("(d)")+
+  xlab("") +
+  ylab("HCO3 (keq/ha/yr)")+
+  geom_abline(intercept = 0, slope = 0, color = "black")
+```
+# Acidity allocation of different scenarios
+
+```{r, fig.height=5, fig.width=10, dpi=300}
+
+scenario_in_flux <- c( "Deposition", "Fertilizer", "Manure", "N fixation", "Lime")
+
+test_scenario <- budget_to_acidity(all_scenario_nut_budget %>% filter(scenario == "BAUL" & land_use == "Upland"), "scenario", scenario_in_flux)
+
+scenario_acidity_allocation <- data.frame()
+scenario_list <- c("Past", "BAU", "BAUL", "BN","BNR", "BNPR")
+
+code = 1
+while (code <=6){
+  sce <- scenario_list[code]
+  
+  if(sce == "Past"){
+    
+    for( type in c("Paddy", "Upland")){
+    
+      df <- budget_to_acidity(all_scenario_nut_budget %>% filter(scenario == scenario_list[code] & land_use == type), "scenario", in_flux)
+    
+      scenario_acidity_allocation <- rbind(scenario_acidity_allocation, df)
+    }
+
+  } else{
+      
+    for( type in c("Paddy", "Upland")){
+    
+      df <- budget_to_acidity(all_scenario_nut_budget %>% filter(scenario == scenario_list[code] & land_use == type), "scenario", scenario_in_flux)
+    
+      scenario_acidity_allocation <- rbind(scenario_acidity_allocation, df)
+    }
+    }
+  code = code + 1
+}
+
+scenario_acidity_allocation$Processes <- factor(scenario_acidity_allocation$Processes, 
+                                                levels = c("N fixation", "Crop removal", "Fertilizer", "Natural soil acidificaiton", "Lime", "Manure", "Deposition"))
+
+ggplot(scenario_acidity_allocation,
+       aes(scenario, Production, fill=Processes))+
+  geom_bar(stat='identity', color="black", width=0.6)+
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14,family="serif"), 
+        panel.spacing = unit(1.0, "lines"))+
+  facet_wrap(~land_use)+
+  scale_fill_manual(name="Process",                     
+                    values = c('#DC0000B2','#F3D266', '#96C37D', 
+                               '#8491B4B2', "#7E6148B2",  '#91D1C2B2', '#2F7FC1'),
+                    breaks = c("N fixation", "Crop removal", "Fertilizer", "Natural soil acidificaiton", "Deposition", "Manure", "Lime"), 
+                    labels = c("N fixation", "Crop removal", "Mineral fertilizer","Natural soil acidificaiton", "Atmospheric deposition", "Organic manure", "Lime"))+
+  scale_y_continuous(limits=c(-15, 15), 
+                     breaks = c(-15, -10, -5, 0, 5, 10, 15), 
+                     labels = c( "-15", "-10", "-5","0", "5", "10", "15"))+
+  geom_hline(yintercept = 0, color = "black") +
+  xlab("") +
+  ylab("H production (keq/ha/yr)")
+
+
+```
+
+```{r fig.height=4, fig.width=8, dpi=300}
+sce_acidity_allocation <- mutate(scenario_acidity_allocation %>% 
+                                   filter(scenario %in% c("Past","BAU", "BAUL", "BNPR")), 
+                                 item = ifelse(Processes %in% c("Manure", "Lime"), 
+                                                    "Consumption", "Production"), 
+                                 code = case_when(scenario == "Past"~0.5, 
+                                                  scenario == "BAU"~1.5, 
+                                                  scenario == "BAUL"~2.5,
+                                                  scenario == "BNPR"~3.5))
+sce_acidity_allocation[sce_acidity_allocation$item=="Consumption","Production"] <- -sce_acidity_allocation[sce_acidity_allocation$item=="Consumption", "Production"]
+
+ggplot()+ 
+  geom_bar(data = sce_acidity_allocation %>% filter(item == "Production"), 
+           aes(code-0.2, Production, fill=Processes),
+           stat='identity', color="black", width=0.3)+
+  geom_bar(data = sce_acidity_allocation %>% filter(item == "Consumption"), 
+           aes(code+0.2, Production, fill=Processes),
+           stat='identity', color="black", width=0.3)+
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 12,family="serif"), 
+        panel.spacing = unit(1.0, "lines"))+
+  facet_wrap(~land_use)+
+  scale_fill_manual(name="Process",                     
+                    values = c('#DC0000B2','#F3D266', '#96C37D', 
+                               '#8491B4B2', "#7E6148B2",  '#91D1C2B2', '#2F7FC1'),
+                    breaks = c("N fixation", "Crop removal", "Fertilizer", "Natural soil acidificaiton", "Deposition", "Manure", "Lime"), 
+                    labels = c("N fixation", "Crop removal", "Mineral fertilizer","Natural soil acidificaiton", "Atmospheric deposition", "Organic manure", "Lime"))+
+  scale_y_continuous(limits=c(-5, 15), 
+                     breaks = c(-15, -10, -5, 0, 5, 10, 15), 
+                     labels = c( "-15", "-10", "-5","0", "5", "10", "15"))+
+  scale_x_continuous(limits = c(0, 4), 
+                     breaks = c(0.5, 1.5, 2.5, 3.5), 
+                     labels = c( "Past", "BAU", "BAUL","BNPR"))+
+  geom_hline(yintercept = 0, color = "black") +
+  xlab("") +
+  ylab("H production (keq/ha/yr)")
+
+
+
+```
+
+<!-- ```{r} -->
+<!-- all_nut_budget <- rbind(past_dep, future_dep, -->
+<!--                         past_fer, past_man, past_upt, past_dis, -->
+<!--                         BAU_fer, BAU_org_man, BAU_upt, BAU_dis, -->
+<!--                         BNP_min_fer, BNP_org_man, BNP_upt, BNP_dis, -->
+<!--                         BNR_min_fer, BNR_org_man, BNR_upt, BNR_dis, -->
+<!--                         BNPR_min_fer, BNPR_org_man, BNPR_upt, BNPR_dis,  -->
+<!--                         BAUL_fer, BAUL_org_man, BAUL_upt, BAUL_dis) %>%  -->
+<!--   as.data.frame() -->
+
+<!-- all_nut_budget$Flux <- factor(all_nut_budget$Flux,  -->
+<!--                                   levels = c( "Deposition", -->
+<!--                                               "Manure",  "Fertilizer",  -->
+<!--                                               "Leaching", "Uptake")) -->
+
+<!-- all_nut_budget$scenario <- factor(all_nut_budget$scenario,  -->
+<!--                                   levels = c( "Past", "BAU", "BAUL","BN", "BNR","BNPR")) -->
+
+<!-- N_budget <- all_nut_budget %>%  -->
+<!--   dplyr::select(c(1:6)) %>%  -->
+<!--   mutate(N=NH4+NO3) %>%  -->
+<!--   plyr::rbind.fill(past_Nfix, past_cum_NH3, past_denit,  -->
+<!--                    future_Nfix,  -->
+<!--                    BAU_cum_NH3, BAU_denit,  -->
+<!--                    BAUL_cum_NH3, BAUL_denit, -->
+<!--                    BNP_cum_NH3, BNP_denit,  -->
+<!--                    BNR_cum_NH3, BNR_denit, -->
+<!--                    BNPR_cum_NH3, BNPR_denit) %>%  -->
+<!--   arrange(land_use, scenario) -->
+
+<!-- N_denit <- N_budget %>% filter(Flux  == "Denitrification")  -->
+<!-- N_leaching <- N_budget %>% filter(Flux  == "Leaching") %>%  -->
+<!--   mutate(Nlf=N_denit$Nlf*N/(N+N_denit$N),  -->
+<!--          N = N-Nlf) -->
+
+<!-- N_denit$N <- N_denit$N - (N_denit$Nlf - N_leaching$Nlf) -->
+
+<!-- cor_N <- rbind(filter(N_budget[,-c(5:6, 8)], !Flux %in% c("Leaching", "Denitrification")),  -->
+<!--                       N_leaching[,-c(5:6, 8)], N_denit[,-c(5:6, 8)]) -->
+
+<!-- minus_para <- c("Uptake", "Leaching", "Denitrification", "NH3 emission") -->
+
+<!-- all_nut_budget[all_nut_budget$Flux %in% minus_para, -c(1:4) ] <-  -->
+<!--   -all_nut_budget[all_nut_budget$Flux %in% minus_para, -c(1:4)] -->
+
+<!-- cor_N[cor_N$Flux %in% minus_para, -c(1:4)] <- -cor_N[cor_N$Flux %in% minus_para, -c(1:4)] -->
+
+<!-- N_acc <- data.frame(land_use=NA, n=NA, scenario=NA, Flux="Accumulation",  -->
+<!--                     N=NA) -->
+<!-- cor_N_new <- cor_N -->
+
+<!-- for (land in unique(cor_N$land_use)){ -->
+
+<!--   tar_crop_N <- filter(cor_N, land_use==land) -->
+
+<!--   N_acc$land_use <- land -->
+
+<!--   for (scen in unique(tar_crop_N$scenario)){ -->
+<!--     N_acc$scenario <- scen -->
+
+<!--     N_acc$N <- sum(filter(tar_crop_N, scenario==scen)[,5]) -->
+
+<!--     cor_N_new <- rbind(cor_N_new, N_acc) -->
+<!--   } -->
+
+<!-- } -->
+<!-- cor_N_new[cor_N_new$Flux=="Accumulation", "N"] <- -cor_N_new[cor_N_new$Flux=="Accumulation", "N"] -->
+
+<!-- cor_N_new$scenario <- factor(cor_N_new$scenario,  -->
+<!--                                   levels = c( "Past", "BAU", "BAUL", "BN",  -->
+<!--                                               "BNR", "BNPR")) -->
+<!-- cor_N_new$Flux <- factor(cor_N_new$Flux,levels = c(  "N fixation", "Deposition",  -->
+<!--                                             "Manure", "Fertilizer", "Accumulation",  -->
+<!--                                             "Leaching",  -->
+<!--                                             "Denitrification", -->
+<!--                                           "NH3 emission", "Uptake")) -->
+
+
+<!-- ggplot(cor_N_new, aes(scenario, N, fill=factor(Flux)))+ -->
+<!--   geom_bar(stat='identity', color="black", width=0.5)+ -->
+<!--   theme_bw()+ -->
+<!--   facet_wrap(~factor(land_use))+ -->
+<!--   theme(axis.ticks.length=unit(0.1, 'cm'),  -->
+<!--         panel.grid.major = element_blank(), panel.grid.minor = element_blank(), -->
+<!--         panel.background = element_rect(fill = "white"),  -->
+<!--         text = element_text(size = 14, family="serif"))+ -->
+<!--   scale_fill_brewer(name="Flux",                      -->
+<!--                     palette = "Spectral", breaks=c( "N fixation", "Deposition", -->
+<!--                                                 "Manure",  "Fertilizer", -->
+<!--                                              "Uptake", "NH3 emission", -->
+<!--                                              "Denitrification","Leaching",  -->
+<!--                                              "Accumulation"))+ -->
+<!--   scale_y_continuous(limits=c(-22, 22),  -->
+<!--                      breaks = c(-20, -10, 0, 10, 20))+ -->
+<!--   ylab("N (keq/ha/yr)")+ -->
+<!--   xlab("")+ -->
+<!--   geom_abline(intercept = 0, slope = 0, color = "black") -->
+
+
+<!-- all_nut_acc <- data.frame(land_use=NA, n=NA, scenario=NA,  -->
+<!--                           Flux=c("Accumulation", "Lime"),  -->
+<!--                     H2PO4=NA, BC=NA, HCO3=NA) -->
+
+<!-- # sce_lime_in <- sce_lime_sum %>%  -->
+<!-- #   mutate(BAUL=BAU, BAU=0, Past=0) -->
+
+<!-- # sce_lime_in <- 0 -->
+
+<!-- all_nut_new <- all_nut_budget %>% as.data.frame() %>%  -->
+<!--   dplyr::select(colnames(all_nut_acc)) -->
+
+<!-- all_nut_new[is.na(all_nut_new$H2PO4), "H2PO4"] <- 0 -->
+
+<!-- sce_lime_gather <- as.data.frame(sce_lime_gather) -->
+
+<!-- for (land in unique(all_nut_new$land_use)){ -->
+
+<!--   tar_crop_nut <- filter(all_nut_new, land_use==land) %>%  -->
+<!--     dplyr::select(colnames(all_nut_acc)) -->
+
+<!--   all_nut_acc$land_use <- land -->
+
+<!--   for (scen in unique(tar_crop_nut$scenario)){ -->
+<!--     all_nut_acc$scenario <- scen -->
+
+<!--     if (scen %in% sce_lime_gather$scenario){ -->
+<!--       tar_sce_lime <- sce_lime_gather[sce_lime_gather$land_use==land & sce_lime_gather$scenario==scen, "mean"] -->
+<!--     } else{ -->
+<!--       tar_sce_lime <- 0 -->
+<!--     } -->
+
+<!--     #  -->
+<!--     #  -->
+<!--     #   if (land == "Paddy"){ -->
+<!--     # tar_sce_lime <- sce_lime_gather[sce_lime_gather$land_use==land , ] -->
+<!--     #   } else{ -->
+<!--     #   tar_sce_lime <- mean(sce_lime_in[sce_lime_in$crop_pat!=land, scen]) -->
+<!--     #   } -->
+<!--     #  -->
+<!--     all_nut_acc[all_nut_acc$Flux=="Lime" ,"HCO3"] <- all_nut_acc[all_nut_acc$Flux=="Lime" ,"BC"] <- tar_sce_lime -->
+
+<!--     all_nut_acc[all_nut_acc$Flux=="Accumulation", "H2PO4"] <- sum(filter(tar_crop_nut, scenario==scen)[,5]) -->
+
+<!--     all_nut_acc[all_nut_acc$Flux=="Accumulation", "BC"] <- sum(filter(tar_crop_nut, scenario==scen)[,6]) + tar_sce_lime -->
+
+<!--     all_nut_acc[all_nut_acc$Flux=="Accumulation", "HCO3"] <- sum(filter(tar_crop_nut, scenario==scen)[,7]) + tar_sce_lime -->
+
+<!--     all_nut_new  <- rbind(all_nut_new, all_nut_acc) -->
+<!--   } -->
+
+<!-- } -->
+
+<!-- all_nut_new[all_nut_new$Flux=="Accumulation", c(5:7)] <- -all_nut_new[all_nut_new$Flux=="Accumulation", c(5:7)] -->
+
+<!-- all_nut_new$Flux <- factor(all_nut_new$Flux,  -->
+<!--                               levels = c( "Deposition", -->
+<!--                                           "Manure",  "Fertilizer", "Lime", -->
+<!--                                           "Soil weathering", -->
+<!--                                           "Accumulation", -->
+<!--                                           "Leaching", "Uptake")) -->
+<!-- all_nut_new$scenario <- factor(all_nut_new$scenario,  -->
+<!--                              levels = c( "Past", "BAU", "BAUL","BN",  -->
+<!--                                          "BNR","BNPR")) -->
+<!-- ggplot(all_nut_new, aes(scenario, H2PO4,  -->
+<!--                            fill=factor(Flux)))+ -->
+<!--   geom_bar(stat='identity', color="black", width=0.5)+ -->
+<!--   theme_bw()+ -->
+<!--   facet_wrap(~factor(land_use))+ -->
+<!--   theme(axis.ticks.length=unit(0.1, 'cm'),  -->
+<!--         panel.grid.major = element_blank(), panel.grid.minor = element_blank(), -->
+<!--         panel.background = element_rect(fill = "white"),  -->
+<!--         text = element_text(size = 14, family="serif"))+ -->
+<!--   scale_fill_brewer(name="Flux",                      -->
+<!--                     palette = "Spectral", breaks=c("Deposition", -->
+<!--                                             "Manure",  "Fertilizer",  -->
+<!--                                              "Uptake", "Leaching", "Accumulation"))+ -->
+<!--   scale_y_continuous(limits=c(-4, 4))+ -->
+<!--   ylab("P (keq/ha/yr)")+ -->
+<!--   xlab("")+ -->
+<!--   geom_abline(intercept = 0, slope = 0, color = "black") -->
+
+<!-- # all_nut_new$Flux <- factor(all_nut_new$Flux,  -->
+<!-- #                            levels = c( "Deposition", -->
+<!-- #                                        "Manure",  "Fertilizer", "Soil weathering", -->
+<!-- #                                        "Accumulation", "Leaching", "Uptake",)) -->
+
+<!-- ggplot(all_nut_new, aes(scenario, BC,  -->
+<!--                            fill=factor(Flux)))+ -->
+<!--   geom_bar(stat='identity', color="black", width=0.5)+ -->
+<!--   theme_bw()+ -->
+<!--   facet_wrap(~factor(land_use))+ -->
+<!--   theme(axis.ticks.length=unit(0.1, 'cm'),  -->
+<!--         panel.grid.major = element_blank(), panel.grid.minor = element_blank(), -->
+<!--         panel.background = element_rect(fill = "white"),  -->
+<!--         text = element_text(size = 14, family="serif"))+ -->
+<!--   scale_fill_brewer(name="Flux",                      -->
+<!--                     palette = "Spectral", breaks=c("Deposition", -->
+<!--                                             "Manure",  "Fertilizer", "Lime", -->
+<!--                                             "Soil weathering", -->
+<!--                                             "Uptake", "Leaching", "Accumulation"))+ -->
+<!--   scale_y_continuous(limits=c(-31, 30),  -->
+<!--                      breaks = c(-30, -20, -10, 0, 10, 20, 30))+ -->
+<!--   ylab("BC (keq/ha/yr)")+ -->
+<!--   geom_abline(intercept = 0, slope = 0, color = "black") -->
+
+<!-- ggplot(all_nut_new, aes(scenario, HCO3,  -->
+<!--                            fill=factor(Flux)))+ -->
+<!--   geom_bar(stat='identity', color="black", width=0.5)+ -->
+<!--   theme_bw()+ -->
+<!--   facet_wrap(~factor(land_use))+ -->
+<!--   theme(axis.ticks.length=unit(0.1, 'cm'),  -->
+<!--         panel.grid.major = element_blank(), panel.grid.minor = element_blank(), -->
+<!--         panel.background = element_rect(fill = "white"),  -->
+<!--         text = element_text(size = 14, family="serif"))+ -->
+<!--   scale_fill_brewer(name="Flux",                      -->
+<!--                     palette = "Spectral", breaks=c("Deposition","Manure",  -->
+<!--                                                     "Fertilizer", "Lime",  -->
+<!--                                                    "Uptake",  -->
+<!--                                                    "Leaching", "Accumulation"))+ -->
+<!--   scale_y_continuous(limits=c(-15, 15),  -->
+<!--                      breaks = c(-15, -10, -5, 0, 5, 10, 15))+ -->
+<!--   ylab("HCO3 (keq/ha/yr)")+ -->
+<!--   geom_abline(intercept = 0, slope = 0, color = "black") -->
+
+<!-- ``` -->
+
+#nutrient surplus of different scenarios
+
+
+
+```{r}
+cur_site_man <- cur_man_in %>% ungroup() %>% 
+  filter(Year==2019) %>% 
+  group_by(Site) %>% 
+  summarise(N_org = mean(NO3+NH4)*10, P_org = mean(P)*10, 
+            BC_org = mean(K+Ca+Mg+Na)*10)%>% ungroup()
+
+cur_site_rem <- tot_crop_removal %>%  ungroup() %>% filter(Year==2019) %>% 
+  group_by(Site) %>% 
+  summarise(N_rem = mean(N)*10, P_rem = mean(P)*10, 
+            BC_rem = mean(K+Ca+Mg+Na)*10) %>% ungroup()
+
+BAU_site_surplus <- cur_fer_in %>% ungroup() %>% filter(Year==2019) %>% 
+  group_by(Site) %>% 
+  summarise(N_min = mean(NO3+NH4)*10, P_min = mean(P)*10, 
+            BC_min = mean(K+Ca+Mg+Na)*10) %>% 
+  cbind(cur_site_man[,-1], cur_site_rem[,-1]) %>% 
+  mutate(N_dep = rep(future_dep$NH4[1] + future_dep$NO3[1], nrow(cur_site_rem)),
+         P_dep = rep(future_dep$H2PO4[1], nrow(cur_site_rem)),
+         BC_dep = rep(future_dep$BC[1],nrow(cur_site_rem)),
+         N_fix = crop_Nfix$Nfix*10,
+         crop_pat = soil_pro$crop_pat, 
+         land_use = soil_pro$land_use, 
+         soil_type = soil_pro$soil_type)
+
+BAU_NP_surplus <- BAU_site_surplus %>% 
+  mutate(N_sur = N_dep + N_fix + N_min + N_org - N_rem, 
+         P_sur = P_dep + P_min + P_org - P_rem) %>% 
+  mutate(land_use = ifelse(crop_pat=="Paddy", "Paddy", "Upland")) %>% 
+  dplyr::select(Site, land_use, N_min, N_org, N_rem, N_sur, 
+         P_min, P_org, P_rem, P_sur)
+
+
+opt_site_man <- BNPR_man %>% ungroup() %>% 
+  filter(Year==2020) %>% 
+  group_by(Site) %>% 
+  summarise(N_org = mean(NO3+NH4)*10, P_org = mean(P)*10, 
+            BC_org = mean(K+Ca+Mg+Na)*10)%>% ungroup()
+
+opt_site_rem <- BNPR_crop %>%  ungroup() %>% filter(Year==2020) %>% 
+  group_by(Site) %>% 
+  summarise(N_rem = mean(N)*10, P_rem = mean(P)*10, 
+            BC_rem = mean(K+Ca+Mg+Na)*10) %>% ungroup()
+
+BNPR_site_surplus <- BNPR_fer %>% ungroup() %>% filter(Year==2020) %>% 
+  group_by(Site) %>% 
+  summarise(N_min = mean(NO3+NH4)*10, P_min = mean(P)*10, 
+            BC_min = mean(K+Ca+Mg+Na)*10) %>% 
+  cbind(opt_site_man[,-1], opt_site_rem[,-1]) %>% 
+  mutate(N_dep = rep(future_dep$NH4[1] + future_dep$NO3[1], nrow(opt_site_rem)),
+         P_dep = rep(future_dep$H2PO4[1], nrow(opt_site_rem)),
+         BC_dep = rep(future_dep$BC[1],nrow(opt_site_rem)),
+         N_fix = crop_Nfix$Nfix*10,
+         crop_pat = soil_pro$crop_pat, 
+         land_use = soil_pro$land_use, 
+         soil_type = soil_pro$soil_type)
+
+BNPR_NP_surplus <- BNPR_site_surplus %>% 
+  mutate(N_sur = N_dep + N_fix + N_min + N_org - N_rem, 
+         P_sur = P_dep + P_min + P_org - P_rem) %>% 
+  mutate(land_use = ifelse(crop_pat=="Paddy", "Paddy", "Upland")) %>% 
+  dplyr::select(Site, land_use, N_min, N_org, N_rem, N_sur, 
+         P_min, P_org, P_rem, P_sur)
+
+BAU_NP_acidity <- sce_acidity %>% 
+  filter(scenario %in% c("Cal_soil", "BAU")) %>% 
+  mutate(scenario = "BAU") 
+
+BAU_NP_acidity <- BAU_NP_surplus %>% 
+  filter(Site %in% BAU_NP_acidity$Site) %>% 
+  cbind(BAU_NP_acidity)
+
+
+BNPR_NP_acidity <- sce_acidity %>% 
+  filter(scenario %in% c("Cal_soil_BNPR", "BNPR")) %>% 
+  mutate(scenario = "BNPR")
+
+BNPR_NP_acidity <- BNPR_NP_surplus %>% 
+  filter(Site %in% BNPR_NP_acidity$Site) %>% 
+  cbind(BNPR_NP_acidity)
+```
+
+# County assessment
+
+```{r pressure, echo=FALSE}
+# load("1_program/current_county_estimation.Rdata")
+
+# calculate potentially available manure in the year of 2014
+pot_ava_man <- pot_man_nut %>% filter(Year %in% c(2014, 2019)) %>% 
+  dplyr::select(Year, Specy, Source, N, P, K, Ca, Mg, S, Cl, Na) %>% 
+  mutate(loss_fr = case_when(Specy == "Cattle"~0.51, 
+                                   Specy == "Sheep"~0.8, 
+                                   Specy == "Poultry"~0.15, 
+                                   Specy == "Human"~0.1,
+                                   TRUE~0), 
+         N_emission_fr = 0.2) %>%
+  group_by(Year) %>% 
+  reframe(N = sum(N*(1-loss_fr)*(1-N_emission_fr)), 
+            P = sum(P*(1-loss_fr)), 
+            K = sum(K*(1-loss_fr)), 
+            Ca = sum(Ca*(1-loss_fr)),
+            Mg = sum(Mg*(1-loss_fr)), 
+            S = sum(S*(1-loss_fr)), 
+            Cl = sum(Cl*(1-loss_fr)), 
+            Na = sum(Na*(1-loss_fr)))
+
+# regional assessment based on harvest yield and manure amount
+# est_man_cal <- est_county_man[est_county_man$soil_type=="Calcareous",
+#                               c("N", "P", "K")] %>% 
+#   as.data.frame()
+
+# estimated currently applied (for the year of 2014) manure amount 
+pot_man_2014 <- pot_ava_man %>% filter(Year == 2014)
+
+county_crop_man <- est_county_man %>% 
+  group_by(crop_pat) %>% 
+  reframe(N = sum(N)/pot_man_2014$N, P = sum(P)/pot_man_2014$P, 
+            K = sum(K)/pot_man_2014$K, Ca = sum(Ca)/pot_man_2014$Ca, 
+            Mg = sum(Mg)/pot_man_2014$Mg, S = sum(S)/pot_man_2014$S, 
+            Cl = sum(Cl)/pot_man_2014$Cl, Na = sum(Na)/pot_man_2014$Na)
+sum(county_crop_man$N)
+
+
+county_soil_man <- est_county_man %>% 
+  group_by(soil_type) %>% 
+  reframe(N = sum(N)/pot_man_2014$N, P = sum(P)/pot_man_2014$P, 
+            K = sum(K)/pot_man_2014$K, Ca = sum(Ca)/pot_man_2014$Ca, 
+            Mg = sum(Mg)/pot_man_2014$Mg, S = sum(S)/pot_man_2014$S, 
+            Cl = sum(Cl)/pot_man_2014$Cl, Na = sum(Na)/pot_man_2014$Na)
+sum(county_soil_man$N)
+
+recy_ratio_calsoil <- county_soil_man[county_soil_man$soil_type=="Calcareous",c("N", "P", "K")] %>% 
+  as.data.frame()
+
+sce_crop_man <- ana_crop_man
+
+# estimate balanced nutrient demand for the year of 2019
+county_mean_area <- apply(filter(ara_area, Year>2013), 2, mean) %>% 
+  t() %>% as.data.frame() %>% 
+  mutate(Year=2020) %>% 
+  dplyr::select(-Arable_land)
+
+# county_mean_area[1, 2:4] <- county_mean_area[1, 2:4]/(2019-2014+1)
+county_mean_area[1, 2:4] <- c(43414.8, 4660, 3914*0.64)
+# Data from http://www.qy.gov.cn/qy/tjxx/202112/554182f86331489895f69e955950a5b6.shtml
+
+est_Nfix <- county_mean_area %>% 
+  mutate(Paddy=Paddy*0.03, 
+         Upland=Upland*0.005 + sum(county_Nfix$Nfix), 
+         Citrus=Citrus*0.005)
+
+colnames(est_Nfix)[3] <- colnames(county_mean_area)[3] <- "Upland crops"
+
+for (crop in sce_crop_man$crop_pat){
+  if (crop %in% colnames(county_mean_area)){
+    land_area <- county_mean_area[, crop]
+    land_Nfix <- est_Nfix[,crop]
+    har_rem <- county_rem_NPK[county_rem_NPK$item=="Harvest" & county_rem_NPK$land_use==crop , c("N", "P")]
+    tot_rem <- har_rem + county_rem_NPK[county_rem_NPK$item=="Residue"& county_rem_NPK$land_use==crop, c("N", "P")]
+    ratio <- sce_crop_man[sce_crop_man$crop_pat==crop, "field_ratio"]
+    
+    sce_crop_man[sce_crop_man$crop_pat==crop, "ara_area"] <- land_area*ratio
+    sce_crop_man[sce_crop_man$crop_pat==crop, "tot_N_rem"] <- tot_rem$N * ratio
+    sce_crop_man[sce_crop_man$crop_pat==crop, "tot_P_rem"] <- tot_rem$P * ratio
+    sce_crop_man[sce_crop_man$crop_pat==crop, "har_N_rem"] <- har_rem$N * ratio
+    sce_crop_man[sce_crop_man$crop_pat==crop, "har_P_rem"] <- har_rem$P * ratio
+    sce_crop_man[sce_crop_man$crop_pat==crop, "N_fix"] <- land_Nfix * ratio
+    
+  }
+}
+
+crop_Pindex <- soil_pro %>% group_by(crop_pat, soil_type) %>% 
+  filter(Field_size<=100/15) %>% 
+  summarise(tot_field = sum(Field_size), 
+            mean_Pindex = mean(P_index)) %>% 
+  arrange(crop_pat, soil_type)
+
+sce_crop_man <- sce_crop_man %>% arrange(crop_pat, soil_type) %>% 
+  ungroup() %>% 
+  dplyr::select(crop_pat, soil_type, ara_area, field_ratio, contains("_rem"), N_fix) %>% 
+  mutate(P_index=crop_Pindex$mean_Pindex) %>% as.data.frame()
+
+N_dep_rate <- 32     # kg/ha
+P_dep_rate <- 0.01 * 310    # kg/ha
+
+sce_crop_man <- mutate(sce_crop_man, N_dep = ara_area * N_dep_rate/1000, 
+                       P_dep = ara_area * P_dep_rate/1000, 
+                       N_fix = ifelse(crop_pat=="Citrus", 0.005*ara_area, 
+                                      ifelse(crop_pat=="Paddy", 0.03*ara_area, 
+                                             0.005*ara_area + sum(county_Nfix$Nfix)*field_ratio)))
+sce_manage <- sce_crop_man %>% 
+  mutate(tot_N_req = tot_N_rem - N_fix*0.9 - N_dep*0.75, 
+         tot_P_req = tot_P_rem * P_index - P_dep, 
+         har_N_req = har_N_rem - N_fix*0.9 - N_dep*0.75, 
+         har_P_req = har_P_rem * P_index - P_dep) %>% 
+  dplyr::select(crop_pat, soil_type, contains(c("_rem","_req")))
+```
+
+```{r echo=FALSE, fig.height=5, fig.width=10}
+soil_crop_req <- sce_manage %>% 
+  dplyr::select(c(crop_pat, soil_type, contains("_req"))) %>% 
+  mutate(crop_pat = ifelse(crop_pat == "Paddy", "Paddy", "Upland")) %>% 
+  group_by(crop_pat, soil_type) %>% 
+  summarise(tot_N = sum(tot_N_req), tot_P = sum(tot_P_req), 
+            har_N = sum(har_N_req), har_P = sum(har_P_req)) %>% 
+  gather(nutrient, amount, -c(crop_pat, soil_type)) %>% 
+  mutate(label = ifelse(grepl("tot_", nutrient), "Total", "Harvest"), 
+         nutrient = ifelse(grepl("_N", nutrient), "N", "P"), 
+         axis_num = ifelse(label=="Total", 0, 0.5)) %>% 
+  arrange(soil_type) %>% 
+  filter(label == "Harvest")
+
+soil_crop_req$crop_pat <- factor(soil_crop_req$crop_pat, 
+                                 levels = c( "Paddy", "Upland"))
+
+crop_effective_man <- (county_crop_man[,-1] * tot_pot_man_2019[col(county_crop_man[,-1])]) %>% 
+  mutate(crop_pat = county_crop_man$crop_pat)
+
+soil_effective_man <- (county_soil_man[,-1] * tot_pot_man_2019[col(county_soil_man[,-1])]) %>% 
+  mutate(soil_type = county_soil_man$soil_type)
+
+pot_effective_man <- pot_man_2019 %>% 
+  mutate(grazing_index = case_when(Specy == "Cattle"~0.51, 
+                                   Specy == "Sheep"~0.8, 
+                                   Specy == "Poultry"~0.15, 
+                                   Specy == "Human"~0.1,
+                                   TRUE~0)) %>% 
+  mutate(grazing_N = N * grazing_index, 
+         grazing_P = P * grazing_index,
+         N_emission = N * 0.2,
+         specy_group = ifelse(Specy == "Human", "Humans", "Animals")) %>% 
+  group_by(specy_group) %>% 
+  summarise(grazing_N = sum(grazing_N), 
+            grazing_P = sum(grazing_P),
+            N_emission = sum(N_emission),
+            N= (sum(N) - grazing_N - N_emission)*0.6, 
+            P=sum(P) - grazing_P) %>% as.data.frame()
+
+effective_man_gather <- gather(pot_effective_man, nutrient, amount, -specy_group) %>% 
+  mutate(axis_num = 1.5)
+
+effective_man_gather$specy_group <- case_when(grepl("grazing_", effective_man_gather$nutrient)~"Grazing", 
+                                              grepl("_emission", effective_man_gather$nutrient)~"Emission", TRUE~effective_man_gather$specy_group)
+
+effective_man_gather$nutrient <- gsub("grazing_", "", effective_man_gather$nutrient)
+effective_man_gather$nutrient <- gsub("_emission", "", effective_man_gather$nutrient)
+
+effective_man_gather$specy_group <- factor(effective_man_gather$specy_group, 
+                                           levels = c( "Emission", "Grazing",
+                                                       "Humans", "Animals"))
+
+ggplot()+
+  geom_bar_pattern(data=soil_crop_req %>% rbind(actual_applied_manure), 
+                   aes(x=axis_num, amount, 
+                       pattern=soil_type, fill=crop_pat),
+                   stat='identity', width = 0.5,
+                   color = "black", pattern_fill = "black",
+                   pattern_density = 0.1, 
+                   pattern_spacing = 0.025,
+                   pattern_key_scale_factor = 0.6)+
+  geom_bar(data=effective_man_gather %>% filter(specy_group %in% c("Humans", "Animals")), 
+           aes(x=axis_num, y=amount, fill=specy_group), 
+           color = "black", 
+           stat = "identity", position="stack", width=0.5)+
+  scale_fill_manual(name = "Crop/manure type",
+                    values = c( '#96C37D',"#8491B4B2", "#7E6148B2", "#E64B35B2"), 
+                    breaks = c("Paddy", "Upland",
+                                "Humans","Animals"), 
+                    labels = c("Paddy", "Upland",
+                                "Human manure", "Animal manure"),
+                    guide = guide_legend(override.aes = list(linetype= c(1,1,1,1), 
+                                                             pattern = "none")))+
+  scale_pattern_manual(values=c("stripe", "none"))+
+  labs(x="", y = "Nutrient amount (t)", 
+       fill=NULL, pattern = "Soil type")+
+  scale_x_continuous(limits=c(0, 3), 
+                     breaks = c(0.5, 1.5, 2.5),
+                     labels = c("Balanced\ndemand", "Effective\nmanure", "Actually\napplied"))+
+  guides(pattern = guide_legend(override.aes = list(fill = "white")))+
+  facet_wrap(~nutrient, nrow = 1, ncol=2, scales = "free_y")+
+  theme_bw()+
+  theme(legend.direction = "vertical",
+        axis.ticks.length=unit(0.2, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14, family="serif"))+
+  ggh4x::facetted_pos_scales(y = list(scale_y_continuous(limits = c(0, 8400)),
+                                       scale_y_continuous(limits = c(0, 2100))))
+
+```
+
+
+```{r}
+# mean_pot_man <- pot_man_nut %>% filter(Year>=2014) %>% 
+#   dplyr::select(Year, Specy, Source, N, P, K, Ca, Mg, K, Na, S, Cl)
+# 
+# pot_man_all <- mean_pot_man %>% dplyr::select(-c("Year", "Specy", "Source")) %>% 
+#   colSums() %>% t() %>% 
+#   as.data.frame() 
+# 
+# past_pot_NP <- mean_pot_NP/(2019-2014+1)
+
+cur_NP_ratio <- est_county_man[,c("N", "P")] %>% 
+  mutate(N = N/sum(pot_man_2014$N), P = P/sum(pot_man_2014$P))
+
+sum(cur_NP_ratio$N); sum(cur_NP_ratio$P)
+
+# pot_man_2019 <- pot_man_nut %>% filter(Year==2019) %>% 
+#   dplyr::select(Year, Specy, Source, N, P, K, Ca, Mg, K, Na, S, Cl)
+
+future_pot_man <- pot_ava_man %>% filter(Year == 2019) %>% 
+  dplyr::select(-Year)
+  
+BAU_man_NP <- cbind(est_county_man[,c("crop_pat", "soil_type")] ,
+                    cur_NP_ratio) %>% ungroup() %>% 
+  mutate(N = N*future_pot_man$N, P = P*future_pot_man$P,
+         N_rem = sce_manage$tot_N_rem, 
+         P_rem = sce_manage$tot_P_rem, 
+         N_req = sce_manage$tot_N_req, 
+         P_req = sce_manage$tot_P_req)
+
+sum(BAU_man_NP$N)/(future_pot_man$N)
+
+all_BAU_manage <- BAU_man_NP[,-c(1:2)] %>% colSums() %>% 
+  t()%>% as.data.frame() %>% 
+  mutate(N_org = N, P_org = P, N_min = fer_data$N[1], P_min = fer_data$P[1], 
+         N_env = sum(sce_crop_man$N_dep + sce_crop_man$N_fix), 
+         P_env = sum(sce_crop_man$P_dep),
+         N_sur = N_min + N_org + N_env - N_rem, 
+         P_sur = P_min + P_org + P_env - P_rem) %>% 
+  dplyr::select(contains(c("env", "min", "org", "rem", "sur"))) %>%
+  mutate(scenario="BAUL")
+
+BN_manage <- BAU_man_NP %>%
+  mutate(N_org = ifelse(N>N_req/0.6, N_req/0.6, N), 
+         P_org = N_org/N*P, 
+         N_min = (N_req - N_org*0.6)/0.75) %>%
+  as.data.frame()
+
+sum(BN_manage$N_org)/(future_pot_man$N)
+
+all_BN_manage <- BN_manage[,-c(1:2)] %>% colSums() %>% 
+  t()%>% as.data.frame() %>% 
+  mutate(scenario="BN", P_min = all_BAU_manage$P_min,
+         N_env = sum(sce_crop_man$N_dep + sce_crop_man$N_fix), 
+         P_env = sum(sce_crop_man$P_dep), 
+         N_sur = N_min + N_org + N_env - N_rem, 
+         P_sur = P_min + P_org + P_env - P_rem) %>% 
+  dplyr::select(colnames(all_BAU_manage)) 
+
+BNR_manage <- BN_manage %>% 
+  mutate(N_rem = sce_manage$har_N_rem, 
+         P_rem = sce_manage$har_P_rem, 
+         N_req = sce_manage$har_N_req, 
+         P_req = sce_manage$har_P_req)
+
+ava_pot_man <- future_pot_man*c(0.6, rep(1, 7)) # Nutrient efficiency is 60% for N and 100% for others
+
+if (sum(BNR_manage$N_req/0.6)<ava_pot_man$N){
+  
+  BNR_manage <-  BNR_manage %>% 
+    mutate(N_org = N_req/0.6, 
+           P_org = N_org*ava_pot_man$P/ava_pot_man$N, 
+           N_min = (N_req - N_org*0.6)/0.75)
+  print("Regional available manure is enough for crop N demand")
+  
+} else{
+  
+  BNR_manage <-  BNR_manage %>% 
+    mutate(N_org = ifelse(N_org>N_req/0.6, N_req/0.6, N_org), 
+           P_org = P/N*N_org)
+  
+  sce_cal_NP <- BNR_manage %>%  
+    filter(soil_type=="Calcareous") %>% 
+    dplyr::select(c(N_org, P_org)) %>% 
+    colSums()
+  
+  sce_man_NP <- (ava_pot_man[,c("N","P")] - sce_cal_NP) %>% 
+    as.data.frame()
+  
+  sce_noncal_req <- BNR_manage %>% filter(soil_type=="Non-calcareous") %>% 
+    dplyr::select(c(N_req, P_req)) %>% 
+    colSums() %>% t() %>%  as.data.frame()
+  
+  if (sce_noncal_req$N_req/0.6<sce_man_NP$N){
+    
+    BNR_manage <- BNR_manage %>% 
+      mutate(N_org = ifelse(soil_type !="Calcareous", N_req/0.6, N_org),
+             P_org = ifelse(soil_type !="Calcareous", N_org*sce_man_NP$P/sce_man_NP$N, P_org),
+             N_min = (N_req - N_org*0.6)/0.75)
+    
+    print("Regional available manure is enough for crop N demand of non-calcareous soils") 
+    
+  } else{
+    rep_ratio <- sce_man_NP$N/(sce_noncal_req$N_req/0.6)
+    
+    output <- paste("Regional available manure replace", round(rep_ratio*100, 1),
+                    "% of N demand in non-calcareous")
+    
+    print(output)
+    
+    BNR_manage <- BNR_manage %>% 
+      mutate(N_org = ifelse(soil_type !="Calcareous", N_req*rep_ratio/0.6, N_org),
+             P_org = ifelse(soil_type !="Calcareous", N_org*sce_man_NP$P/sce_man_NP$N, P_org),
+             N_min = (N_req - N_org*0.6)/0.75)
+  }
+}
+
+sum(BNR_manage$N_org)/(future_pot_man$N)
+sum(BNR_manage$P_org)/(future_pot_man$P)
+
+all_BNR_manage <- BNR_manage[,-c(1:2)] %>% colSums() %>% 
+  t()%>% as.data.frame() %>% 
+  mutate(scenario="BNR", P_min = all_BAU_manage$P_min,
+         N_env = sum(sce_crop_man$N_dep + sce_crop_man$N_fix), 
+         P_env = sum(sce_crop_man$P_dep), 
+         N_sur = N_min + N_org + N_env - N_rem, 
+         P_sur = P_min + P_org + P_env - P_rem) %>% 
+  dplyr::select(colnames(all_BAU_manage))
+
+BNPR_manage <- BN_manage %>% 
+  mutate(N_rem = sce_manage$har_N_rem, 
+         P_rem = sce_manage$har_P_rem, 
+         N_req = sce_manage$har_N_req, 
+         P_req = sce_manage$har_P_req)
+  
+if (sum(BNPR_manage$P_req)<ava_pot_man$P){
+  
+  BNPR_manage <-  BNPR_manage %>% 
+    mutate(P_org = P_req, 
+           N_org = P_org*ava_pot_man$N/ava_pot_man$P, 
+           N_min = (N_req - N_org*0.6)/0.75,
+           P_min = ifelse((P_req - P_org)<0, 0, P_req - P_org))
+  print("Regional available manure is enough for crop P demand")
+  
+} else{
+  
+  BNPR_manage <-  BNPR_manage %>% 
+    mutate(P_org = ifelse(P_org>P_req, P_req, P_org), 
+           N_org = P_org*N/P)
+  
+  sce_cal_NP <- BNPR_manage %>%  
+    filter(soil_type=="Calcareous") %>% 
+    dplyr::select(c(N_org, P_org)) %>% 
+    colSums()
+  
+  sce_man_NP <- (ava_pot_man[,c("N","P")] - sce_cal_NP) %>% 
+    as.data.frame()
+  
+  sce_noncal_req <- BNPR_manage %>% filter(soil_type=="Non-calcareous") %>% 
+    dplyr::select(c(N_req, P_req)) %>% 
+    colSums() %>% t() %>%  as.data.frame()
+  
+  if (sce_noncal_req$P_req<sce_man_NP$P){
+    
+    BNPR_manage <- BNPR_manage %>% 
+      mutate(P_org = ifelse(soil_type !="Calcareous", P_req, P_org),
+             N_org = ifelse(soil_type !="Calcareous", P_org*sce_man_NP$N/sce_man_NP$P, 
+                            N_org),
+             N_min = (N_req - N_org*0.6)/0.75,
+             P_min = ifelse((P_req - P_org)<0, 0, P_req - P_org))
+    
+    print("Regional available manure is enough for crop P demand of non-calcareous soils") 
+    
+    rep_ratio_cal <- (ava_pot_man$P - sum(BNPR_manage$P_org))/future_pot_man$P
+
+    output <- paste(round(rep_ratio_cal*100, 1), 
+                    "% of potential manure P can go to calcareous soils")
+    print(output)
+    
+    # res_P_req <- BNPR_manage[BNPR_manage$P_min>0 & 
+    #                            BNPR_manage$crop_pat == "Upland crops", ] %>% 
+    #   mutate(P_org = P_org + future_pot_man$P*rep_ratio_cal, 
+    #          N_org = N_org + future_pot_man$P*rep_ratio_cal*sce_man_NP$N/sce_man_NP$P, 
+    #          N_min = (N_req - N_org*0.6)/0.75,
+    #          P_min = ifelse((P_req - P_org)<0, 0, P_req - P_org))
+    # 
+    # BNPR_manage <- rbind(BNPR_manage[BNPR_manage$P_min==0, ], 
+    #                      res_P_req)    
+    
+  } else{
+    rep_ratio <- sce_man_NP$P/(sce_noncal_req$P_req)
+    
+    output <- paste("Regional available manure replace", round(rep_ratio*100, 1),
+                    "% of P demand in non-calcareous")
+    
+    print(output)
+    
+    BNPR_manage <- BNPR_manage %>% 
+      mutate(P_org = ifelse(soil_type !="Calcareous", P_req*rep_ratio, P_org),
+             N_org = ifelse(soil_type !="Calcareous", P_org*sce_man_NP$N/sce_man_NP$P, 
+                            N_org),
+             N_min = (N_req - N_org*0.6)/0.75, 
+             P_min = ifelse((P_req - P_org)<0, 0, P_req - P_org))
+  }
+}
+
+sum(BNPR_manage$P_org)/(future_pot_man$P)
+sum(BNPR_manage$N_org)/(future_pot_man$N)
+  
+all_BNPR_manage <- BNPR_manage[,-c(1:2)] %>% colSums() %>% 
+  t()%>% as.data.frame() %>% 
+  mutate(scenario="BNPR", 
+         N_env = sum(sce_crop_man$N_dep + sce_crop_man$N_fix), 
+         P_env = sum(sce_crop_man$P_dep), 
+         N_sur = N_min + N_org + N_env - N_rem, 
+         P_sur = P_min + P_org + P_env - P_rem) %>% 
+  dplyr::select(colnames(all_BAU_manage))
+
+# Calculate lime requirement
+county_non_cal <- sce_crop_man %>% filter(soil_type=="Non-calcareous")
+
+for (crop in sce_lime_sum$crop_pat){
+  non_cal_area <- county_non_cal[county_non_cal$crop_pat==crop, "ara_area"]
+  sce_lime_sum[sce_lime_sum$crop_pat==crop, "ara_area"] <- non_cal_area  
+}
+
+sce_tot_lime <- sce_lime_sum %>% 
+  gather(scenario, Ca_eq, -c(crop_pat, ara_area)) %>% 
+  mutate(lime=Ca_eq*ara_area*0.05) %>% 
+  group_by(scenario) %>% 
+  summarise(lime = sum(lime)/30) %>% 
+  arrange(scenario)
+
+county_manage <- rbind(all_BAU_manage, all_BN_manage, 
+                       all_BNR_manage, all_BNPR_manage)%>% 
+  arrange(scenario)  %>% mutate(lime= sce_tot_lime$lime) %>% 
+  gather(item, value, -scenario) %>% 
+  mutate(nutrient=ifelse(grepl("N_", item), "Nitrogen", 
+                         ifelse(grepl("P_", item), "Phosphorus", "Lime")), 
+         source = ifelse(grepl("_env", item), "Environment input", 
+                         ifelse(grepl("_min", item), "Fertilizer",
+                                ifelse(grepl("_org", item), "Manure",
+                                       ifelse(grepl("_rem", item), "Uptake",
+                                              ifelse(grepl("_sur", item), "Surplus", 
+                                                     "Lime"))))), 
+         flux = ifelse(source %in% c("Environment input", "Manure", "Fertilizer"),
+                       "Input", ifelse(source %in% c("Uptake","Surplus"), "Output", 
+                                    "Lime")), 
+         x = ifelse(scenario=="BAUL", 1, 
+                    ifelse(scenario=="BN", 2,
+                           ifelse(scenario=="BNR", 3, 4))))
+
+county_manage$source <- factor(county_manage$source, 
+                               levels = c("Environment input", "Manure", 
+                                          "Fertilizer", "Surplus", "Uptake", 
+                                          "Lime"))
+
+county_manage$nutrient <- factor(county_manage$nutrient, 
+                               levels = c("Nitrogen", "Phosphorus", "Lime"))
+
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=8, dpi=300}
+p1 <- ggplot()+
+  geom_bar(data=filter(county_manage, flux=="Input"), 
+                   aes(x, value, fill=source), color="black",
+                   stat='identity', width = 0.3)+
+  geom_bar(data=filter(county_manage, flux=="Output"), 
+                   aes(x+0.4, value, fill=source), color="black",
+                   stat='identity', width = 0.3)+
+  geom_bar(data=filter(county_manage, flux=="Lime"), 
+           aes(x=x+0.2, y=value, fill=source), color="black",
+           stat = "identity", position="stack", width=0.3)+
+  scale_fill_manual(values = c('#DC0000B2', '#96C37D','#F3D266',
+                               '#91D1C2B2', '#2F7FC1', "grey"), 
+                    breaks = c("Environment input", "Manure", "Fertilizer", 
+                               "Surplus", "Uptake", ""))+
+  labs(x="", y = "Nutrient input/output (t/year)", 
+       fill=expression("Input"~~~~~~~~~~~~~~~~~~~~~~"Output"))+
+  scale_x_continuous(breaks = c(1.2, 2.2,3.2, 4.2),
+                     labels = c("BAUL","BN","BNR", "BNPR"))+
+  facet_wrap(~nutrient, nrow = 2, ncol=2, scales = "free_y")+
+  guides(fill = guide_legend(ncol = 2))+
+  theme_bw()+
+  theme(legend.direction = "vertical", legend.box = "horizontal", 
+        axis.ticks.length=unit(0.2, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14, family="serif"))+
+  ggh4x::facetted_pos_scales(y = list(scale_y_continuous(limits = c(0, 30000)),
+                                       scale_y_continuous(limits = c(0, 10000)),
+                                       scale_y_continuous(limits = c(0, 1000))))
+
+shift_legend3 <- function(p) {
+  pnls <- cowplot::plot_to_gtable(p) %>% gtable::gtable_filter("panel") %>%
+    with(setNames(grobs, layout$name)) %>% purrr::keep(~identical(.x,ggplot2::zeroGrob()))
+  
+  if( length(pnls) == 0 ) stop( "No empty facets in the plot" )
+  
+  lemon::reposition_legend( p, "center", panel=names(pnls) )
+}
+
+shift_legend3(p1)
+
+```
+# An example for geom_bar_pattern
+
+county_manage <- rbind(all_BAU_manage, all_BN_manage, 
+                       all_BNR_manage, all_BNPR_manage)%>% 
+  arrange(scenario)  %>% mutate(lime= sce_tot_lime$lime) %>% 
+  gather(item, value, -scenario) %>% 
+  mutate(nutrient=ifelse(grepl("N_", item), "Nitrogen", 
+                         ifelse(grepl("P_", item), "Phosphorus", "Lime")), 
+         source = ifelse(grepl("_env", item), "Environment input", 
+                         ifelse(grepl("_min", item), "Fertilizer",
+                                ifelse(grepl("_org", item), "Manure",
+                                       ifelse(grepl("_rem", item), "Uptake",
+                                              ifelse(grepl("_sur", item), "Surplus", 
+                                                     "Lime"))))), 
+         flux = ifelse(source %in% c("Environment input", "Manure", "Fertilizer"),
+                       "Input", ifelse(source %in% c("Uptake","Surplus"), "Output", 
+                                    "Lime")), 
+         x = ifelse(scenario=="BAUL", 1, 
+                    ifelse(scenario=="BN", 2,
+                           ifelse(scenario=="BNR", 3, 4))))
+
+county_manage$source <- factor(county_manage$source, 
+                               levels = c("Environment input", "Manure", 
+                                          "Fertilizer", "Surplus", "Uptake", 
+                                          "Lime"))
+
+county_manage$nutrient <- factor(county_manage$nutrient, 
+                               levels = c("Nitrogen", "Phosphorus", "Lime"))
+                               
+p1 <- ggplot()+
+  geom_bar_pattern(data=filter(county_manage, flux=="Input"), 
+                   aes(x, value, 
+                       fill=source, pattern=flux),
+                   stat='identity', width = 0.3,
+                   color = "black", pattern_fill = "black",
+                   pattern_density = 0.1,
+                   pattern_spacing = 0.025,
+                   pattern_key_scale_factor = 0.6)+
+  geom_bar_pattern(data=filter(county_manage, flux=="Output"), 
+                   aes(x+0.4, value, 
+                       fill=source, pattern=flux),
+                   stat='identity', width = 0.3,
+                   color = "black", 
+                   pattern_fill = "black",
+                   pattern_angle = 45,
+                   pattern_density = 0.1,
+                   pattern_spacing = 0.025,
+                   pattern_key_scale_factor = 0.6)+
+  geom_bar(data=filter(county_manage, flux=="Lime"), 
+           aes(x=x+0.2, y=value, fill=source), color="black",
+           stat = "identity", position="stack", width=0.3)+
+  scale_fill_manual(values = c('#DC0000B2', '#96C37D','#F3D266',
+                               '#91D1C2B2', '#2F7FC1', "grey"), 
+                    breaks = c("Environment input", "Manure", "Fertilizer", 
+                               "Surplus", "Uptake", "Lime"))+
+  scale_pattern_manual(values=c("none", "stripe"))+
+  labs(x="", y = "Nutrient input/output (t/year)", 
+       fill="Flux", pattern = "Item")+
+  scale_x_continuous(breaks = c(1.2, 2.2,3.2, 4.2),
+                     labels = c("BAUL","BN","BNR", "BNPR"))+
+  guides(pattern = guide_legend(override.aes = list(fill = "white")),
+         fill = guide_legend(override.aes = list(pattern = "none")))+
+  facet_wrap(~nutrient, nrow = 2, ncol=2, scales = "free_y")+
+  theme_bw()+
+  theme(legend.direction = "vertical", legend.box = "horizontal", 
+        axis.ticks.length=unit(0.2, 'cm'), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 14, family="serif"))+
+  ggh4x::facetted_pos_scales(y = list(scale_y_continuous(limits = c(0, 30000)),
+                                       scale_y_continuous(limits = c(0, 10000)),
+                                       scale_y_continuous(limits = c(0, 1000))))
+
+shift_legend3 <- function(p) {
+  pnls <- cowplot::plot_to_gtable(p) %>% gtable::gtable_filter("panel") %>%
+    with(setNames(grobs, layout$name)) %>% purrr::keep(~identical(.x,ggplot2::zeroGrob()))
+  
+  if( length(pnls) == 0 ) stop( "No empty facets in the plot" )
+  
+  lemon::reposition_legend( p, "center", panel=names(pnls) )
+}
+
+shift_legend3(p1)
+
+
+```{r}
+# 
+# pot_man_NP <- sum_pot_man_nut %>% 
+#   filter(nutrient %in% c("N", "P") & Year == 2019) %>% 
+#   mutate(axis_num =2.5, 
+#          amount = ifelse(nutrient == "N", amount*0.52, 
+#                          amount*0), 
+#          label = "Manure losses")
+# 
+# man_NP <- sum_pot_man_nut %>% 
+#   filter(nutrient %in% c("N", "P") & Year == 2019) %>% 
+#   mutate(axis_num =2.5, 
+#          amount = ifelse(nutrient == "N", amount*0.8*0.6, 
+#                          amount), 
+#          label = "Avaiable to crops") %>% rbind(pot_man_NP)
+# 
+# 
+# man_NP$label <- factor(man_NP$label,
+#                        levels = c("Manure losses", "Avaiable to crops"))
+# 
+# 
+# ggplot()+
+#   geom_bar_pattern(data=soil_crop_req %>% filter(label == "Harvest"), 
+#                    aes(x=axis_num, amount, 
+#                        pattern=soil_type, fill=crop_pat),
+#                    stat='identity', width = 0.5,
+#                    color = "black", pattern_fill = "black",
+#                    pattern_density = 0.1, 
+#                    pattern_spacing = 0.025,
+#                    pattern_key_scale_factor = 0.6)+
+#   geom_bar(data=man_NP, aes(x=axis_num, y=amount, fill=label), 
+#            color = "black", linetype = 2,
+#            stat = "identity", position="stack", width=0.5)+
+#   scale_fill_manual(values = c( '#96C37D',"#8491B4B2", "#7E6148B2", "#E64B35B2"), 
+#                     breaks = c("Paddy", "Upland",
+#                                 "Manure losses","Avaiable to crops"), 
+#                     guide = guide_legend(override.aes = list(linetype= c(1,1,2,2), 
+#                                                              pattern = "none")))+
+#   scale_pattern_manual(values=c("stripe", "none"))+
+#   labs(x="", y = "Nutrient amount (t)", 
+#        fill=NULL, pattern = "Soil type")+
+#   scale_x_continuous(limits=c(0, 3), 
+#                      breaks = c(0.5, 1.5, 2.5),
+#                      labels = c("Total\ndemand","Harvest\ndemand", "Potential\nmanure"))+
+#   guides(pattern = guide_legend(override.aes = list(fill = "white")))+
+#   facet_wrap(~nutrient, nrow = 1, ncol=2, scales = "free_y")+
+#   theme_bw()+
+#   theme(legend.direction = "vertical",
+#         axis.ticks.length=unit(0.2, 'cm'), 
+#         panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+#         panel.background = element_rect(fill = "white"), 
+#         text = element_text(size = 14, family="serif"))+
+#   ggh4x::facetted_pos_scales(y = list(scale_y_continuous(limits = c(0, 10000)),
+#                                        scale_y_continuous(limits = c(0, 2500))))
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
