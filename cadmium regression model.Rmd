@@ -1,0 +1,253 @@
+```{r}
+library(data.table)
+
+#**Load dataset**
+pri_df<- fread("pri_Cd_data.csv", header=TRUE, sep=";", skip = 2, 
+                    fill=TRUE) 
+pri_df[, `:=`(
+  logclay = log10(Clay),
+  logSOC = log10(OC/10),
+  logsolutionCd = log10(SoilCdavi*10),
+  logsoilCd = log10(SoilCdtot)
+)]                    
+
+#**Derive soil-solution regression model**
+# Select relevant columns and remove missing values
+soil_solution <- pri_df[, .(logsolutionCd, logsoilCd, logSOC, logclay, pH, source, land_use)]
+soil_solution <- na.omit(soil_solution)
+
+#**Multiple linear regression for raw crop data**
+ML_solution <- lm(logsolutionCd ~ logsoilCd + logSOC + logclay + pH + land_use - 1, data = soil_solution)
+summary(ML_solution)
+
+#**Clean solution data based on Cook distance**
+# Calculate Cook's Distance
+cook_dist <- cooks.distance(ML_solution)
+
+# Identify high Cook's Distance points
+high_cook <- which(cook_dist > 4 / length(cook_dist))
+
+# Plot Cook's Distance
+plot(cook_dist, type = "h", main = "Cook's Distance", ylab = "Cook's Distance")
+abline(h = 4 / length(cook_dist), col = "red", lty = 2)  # Threshold line
+
+# Remove high Cook's Distance points
+clean_solu_data <- soil_solution[-high_cook]
+
+#**Multiple regression model for cleaned data**
+ML_solution_clean <- lm(logsolutionCd ~ logsoilCd + logSOC + logclay + pH + land_use - 1, data = clean_solu_data)
+summary(ML_solution_clean)
+
+# Add predictions
+clean_solu_data[, pred := predict(ML_solution_clean)]
+
+# Mark outliers
+soil_solution[, outlier := "prediction"]
+soil_solution[high_cook, outlier := "outlier"]
+
+#**Calculate Normalized Mean Absolute Error (NMAE), Normalized Root Mean Square Error (NRMSE), and the R-squared **
+solu_nmae <- mean(abs(clean_solu_data$pred - clean_solu_data$logsolutionCd)) / mean(abs(clean_solu_data$logsolutionCd))  # NMAE in percentage
+solu_nrmse <- sqrt(mean((clean_solu_data$pred - clean_solu_data$logsolutionCd)^2)) / mean(abs(clean_solu_data$logsolutionCd))  # NRMSE in percentage
+
+# Extract coefficients for the regression equation
+solu_coeffs <- round(coef(ML_solution_clean), 2)
+
+# Get regression equations and build the regression equation as a string
+solu_regression_eq <- paste0(
+  "logsolutionCd = ",
+  solu_coeffs["logsoilCd"], "*logsoilCd",
+  solu_coeffs["logSOC"], "*logSOC",  solu_coeffs["logclay"], "*logclay", "\n",
+  "                       ", solu_coeffs["pH"], "*pH+", 
+  ifelse("land_usePaddy" %in% names(solu_coeffs), solu_coeffs["land_usePaddy"], 0), "*paddy+",
+  ifelse("land_useUpland" %in% names(solu_coeffs), solu_coeffs["land_useUpland"], 0), "*upland"
+)
+
+# Derive predictions based on the multiple linear regression
+soil_solution[, pred := ifelse(land_use == "Upland", solu_coeffs["logsoilCd"]*logsoilCd + solu_coeffs["logSOC"]*logSOC + solu_coeffs["logclay"]*logclay + solu_coeffs["pH"]*pH + solu_coeffs["land_useUpland"], 
+                                                     solu_coeffs["logsoilCd"]*logsoilCd + solu_coeffs["logSOC"]*logSOC + solu_coeffs["logclay"]*logclay + solu_coeffs["pH"]*pH + solu_coeffs["land_usePaddy"])]
+
+
+#** Derive soil-crop regression model**
+rice_data <- pri_df[, logcropCd := log10(RiceCd)]
+rice_data$crop <- "grain"
+straw_data <- pri_df[, logcropCd := log10(StrawCd)]
+straw_data$crop <- "straw"
+crop_data <- rbind(na.omit(rice_data), na.omit(straw_data))
+
+#**Multiple linear regression for raw crop data**
+ML_crop = lm(logcropCd ~ logsoilCd + logSOC+logclay+pH+crop-1, data = crop_data)
+summary(ML_crop)
+
+#**Clean crop data based on Cook distance**
+# Get Cook's Distance
+cook_dist <- cooks.distance(ML_crop)
+
+# Identify points with high Cook's Distance (e.g., greater than 4/n)
+high_cook <- which(cook_dist > 4/length(cook_dist))
+
+# Plot Cook's Distance
+plot(cook_dist, type = "h", main = "Cook's Distance", ylab = "Cook's Distance")
+abline(h = 4/length(cook_dist), col = "red", lty = 2)  # Threshold line
+
+crop_data$outlier <- "prediction"
+crop_data[high_cook, ]$outlier <- "outlier"
+
+# Remove rows corresponding to identified outliers (example: based on Cook's Distance)
+clean_crop_data <- crop_data[-high_cook, ]
+
+#**Multiple relationship for cleaned data**
+ML_crop_clean = lm(logcropCd ~ logsoilCd + logSOC+logclay+pH+crop-1, 
+                   data = clean_crop_data)
+summary(ML_crop_clean)
+
+# Add predictions
+clean_crop_data[, pred := predict(ML_crop_clean)]
+
+#**Calculate Normalized Mean Absolute Error (NMAE), Normalized Root Mean Square Error (NRMSE), and the R-squared **
+crop_nmae <- mean(abs(clean_crop_data$pred - clean_crop_data$logcropCd)) / mean(abs(clean_crop_data$logcropCd))  # NMAE in percentage
+crop_nrmse <- sqrt(mean((clean_crop_data$pred - clean_crop_data$logcropCd)^2)) / mean(abs(clean_crop_data$logcropCd))  # NRMSE in percentage
+# Extract coefficients for the regression equation
+crop_coeffs <- round(coef(ML_crop_clean), 2)
+
+crop_regression_eq <- paste0(
+  "logcropCd = ",
+  crop_coeffs["logsoilCd"], "*logsoilCd",
+  crop_coeffs["logSOC"], "*logSOC", crop_coeffs["logclay"], "*logclay", "\n",
+  "                  ",
+  crop_coeffs["pH"], "*pH+", 
+  ifelse("cropgrain" %in% names(crop_coeffs), crop_coeffs["cropgrain"], 0), "*grain+",
+  ifelse("cropstraw" %in% names(crop_coeffs), crop_coeffs["cropstraw"], 0), "*straw"
+)
+
+# Derive predictions based on the multiple linear regression
+crop_data[, pred := ifelse(crop == "straw", crop_coeffs["logsoilCd"]*logsoilCd + crop_coeffs["logSOC"]*logSOC + crop_coeffs["logclay"]*logclay + crop_coeffs["pH"]*pH + crop_coeffs["cropstraw"], 
+                                      crop_coeffs["logsoilCd"]*logsoilCd + crop_coeffs["logSOC"]*logSOC + crop_coeffs["logclay"]*logclay + crop_coeffs["pH"]*pH + crop_coeffs["cropgrain"])] 
+                    
+
+#**Make plot**
+# Combine metrics and equation for annotation
+crop_annotation_text <- paste0(
+  crop_regression_eq, "\n",
+  "R² = ", round(summary(ML_crop_clean)$r.squared, 2), "\n",
+  "NMAE = ", round(crop_nmae, 2), "\n",
+  "NRMSE = ", round(crop_nrmse, 2)
+)
+
+# Adjust annotation position for clarity
+crop_annotate_x <- min(crop_data$logcropCd) - 0.1
+crop_annotate_y <- 1.5
+
+library(ggsci)
+p1 <- ggplot(crop_data)+
+  geom_point(aes(x = logcropCd, y = pred, 
+                 color = crop, shape = source, alpha = outlier),
+             size = 3) +  # Points
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", linewidth = 1) +  # Line of perfect fit
+  labs(
+    x = "Measured log Crop Cd content",
+    y = "Predicted log Crop Cd content",
+    title = "(a)",
+    color = "Crop",         # Custom title for color legend
+    shape = "Data type",       # Custom title for shape legend
+    alpha = "Data source"     # Custom title for alpha legend
+  ) +
+  xlim(c(-3.5, 1.5))+
+  ylim(c(-2.5, 1.5))+
+  scale_color_npg()+
+  scale_alpha_manual(values = c(0.3, 1))+
+  scale_shape_manual(values = c(1, 16))+
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_text(size = 12),    # Legend title font size
+    legend.text = element_text(size = 10),     # Legend text font size
+    legend.position = "bottom",        # Legend position
+  ) +
+  guides(
+    alpha = guide_legend(override.aes = list(size = 2), nrow = 2),  # Adjust legend point size for alpha
+    color = guide_legend(override.aes = list(size = 2), nrow = 2),  # Adjust legend point size for color
+    shape = guide_legend(override.aes = list(size = 2), nrow = 2)   # Adjust legend point size for shape
+  )+
+  annotate(
+    "text",
+    x = annotate_x,
+    y = annotate_y,
+    label = crop_annotation_text,
+    hjust = 0,
+    vjust = 1,
+    size = 3.5,
+    color = "black"
+  )
+
+# Combine metrics and equation for annotation
+solu_annotation_text <- paste0(
+  solu_regression_eq, "\n",
+  "R² = ", round(summary(ML_solupred)$r.squared, 2), "\n",
+  "NMAE = ", round(solu_nmae, 2), "\n",
+  "NRMSE = ", round(solu_nrmse, 2)
+)
+
+# Adjust annotation position for clarity
+solu_annotate_x <- min(soil_solution$logsolutionCd) - 0.1
+solu_annotate_y <- 1.5
+
+p2 <- ggplot(soil_solution)+
+  geom_point(aes(x = logsolutionCd, y = pred, 
+                 color = land_use, shape = source, alpha = outlier),
+             size = 3) +  # Points
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", linewidth = 1) +  # Line of perfect fit
+  labs(
+    x = "Measured log solution Cd content",
+    y = "Predicted log solution Cd content",
+    title = "(b)",
+    color = "Land use",         # Custom title for color legend
+    shape = "Data type",       # Custom title for shape legend
+    alpha = "Data source"     # Custom title for alpha legend
+  ) +
+  xlim(c(-3.5, 1.5))+
+  ylim(c(-2.5, 1.5))+
+  scale_color_npg()+
+  scale_alpha_manual(values = c(0.3, 1))+
+  scale_shape_manual(values = c(1, 16))+
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_text(size = 12),    # Legend title font size
+    legend.text = element_text(size = 10),     # Legend text font size
+    legend.position = "bottom",        # Legend position
+  ) +
+  guides(
+    alpha = guide_legend(override.aes = list(size = 2), nrow = 2),  # Adjust legend point size for alpha
+    color = guide_legend(override.aes = list(size = 2), nrow = 2),  # Adjust legend point size for color
+    shape = guide_legend(override.aes = list(size = 2), nrow = 2)   # Adjust legend point size for shape
+  )+
+  annotate(
+    "text",
+    x = annotate_x,
+    y = annotate_y,
+    label = solu_annotation_text,
+    hjust = 0,
+    vjust = 1,
+    size = 3.5,
+    color = "black"
+  )
+
+library(patchwork)
+
+# Combine p1 and p2 with a shared legend
+combined_plot <- p1 + p2 + 
+  plot_layout(guides = "collect") &  # Collect and share legends
+  theme(legend.position = "bottom")  # Place the legend at the bottom
+
+print(combined_plot)
+
+# combined_plot
+ggsave(combined_plot, filename = "regression_model.tiff",
+  width = 11,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+```
