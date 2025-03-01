@@ -1,6 +1,6 @@
 These files are for the Manuscript Large-scale impacts of nutrient management strategies on acidification-induced risks for crop yields and food quality by cadmium
 
-Authors: Donghao Xu^1,2^, Gerard H. Ros^1^, Pengqi Liu^2^, Qichao Zhu^2^, Fusuo Zhang^2^, Wim de Vries^1^
+Authors: Donghao Xu<sup>1,2</sup>, Gerard H. Ros^1^, Pengqi Liu^2^, Qichao Zhu^2^, Fusuo Zhang^2^, Wim de Vries^1^
 1 Wageningen University and Research, Earth Systems and Global Change Group, PO Box 47, 6700AA Wageningen, the Netherlands 
 2 College of Resources and Environmental Sciences; National Academy of Agriculture Green Development, China Agricultural University, 100193 Beijing, China
 
