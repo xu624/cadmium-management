@@ -1,8 +1,10 @@
-These files are for the Manuscript Large-scale impacts of nutrient management strategies on acidification-induced risks for crop yields and food quality by cadmium
+This repo contains files used for the data analysis on Cd risks in croplands in China.
+It belongs to the Manuscript `Large-scale impacts of nutrient management strategies on acidification-induced risks for crop yields and food quality by cadmium`
 
-Authors: Donghao Xu<sup>1,2</sup>, Gerard H. Ros^1^, Pengqi Liu^2^, Qichao Zhu^2^, Fusuo Zhang^2^, Wim de Vries^1^
-1 Wageningen University and Research, Earth Systems and Global Change Group, PO Box 47, 6700AA Wageningen, the Netherlands 
-2 College of Resources and Environmental Sciences; National Academy of Agriculture Green Development, China Agricultural University, 100193 Beijing, China
+Authors: Donghao Xu<sup>1,2</sup>, Gerard H. Ros<sup>1</sup>, Pengqi Liu<sup>2</sup>, Qichao Zhu<sup>2</sup>, Fusuo Zhang<sup>2</sup>, Wim de Vries<sup>1</sup>
+
+<sup>1</sup> Wageningen University and Research, Earth Systems and Global Change Group, PO Box 47, 6700AA Wageningen, the Netherlands 
+<sup>2</sup> College of Resources and Environmental Sciences; National Academy of Agriculture Green Development, China Agricultural University, 100193 Beijing, China
 
 Corresponding authors are qichaozhu@126.com; donghao.xu@wur.nl 
 
