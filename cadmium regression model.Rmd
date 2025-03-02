@@ -9,7 +9,7 @@ This R markdown file contains the scripts for the data analysis done for the stu
 library(data.table); library(ggplot2); library(patchwork);library(ggsci)
 
 # load database
-pri_df <- fread("pri_Cd_data.csv", header=TRUE, sep=";", skip = 2, fill=TRUE) 
+pri_df <- fread("pri_Cd_data.csv", header=TRUE, sep=",", skip = 2, fill=TRUE) 
 
 # add log transformations
 pri_df[,logclay := log10(Clay)]
@@ -82,10 +82,17 @@ soil_solution[!land_use == "Upland", pred:= solu_coeffs["logsoilCd"]*logsoilCd +
 
 
 #** Derive soil-crop regression model**
-rice_data <- pri_df[, logcropCd := log10(RiceCd)]
-rice_data$crop <- "grain"
-straw_data <- pri_df[, logcropCd := log10(StrawCd)]
-straw_data$crop <- "straw"
+rice_data <- pri_df[
+  complete.cases(RiceCd, SoilCdtot, logSOC, source, logclay, pH), 
+  .(logcropCd = log10(RiceCd), crop = "grain",
+    logsoilCd, logSOC, source, logclay, pH)]
+
+# Process straw_data
+straw_data <- pri_df[
+  complete.cases(StrawCd, SoilCdtot, logSOC, source, logclay, pH), 
+  .(logcropCd = log10(StrawCd), crop = "straw",
+    logsoilCd, logSOC, source, logclay, pH)]
+
 crop_data <- rbind(na.omit(rice_data), na.omit(straw_data))
 
 #**Multiple linear regression for raw crop data**
