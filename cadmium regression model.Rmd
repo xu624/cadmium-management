@@ -163,7 +163,7 @@ crop_annotation_text <- paste0(crop_regression_eq, "\n",
                               )
 
 # Adjust annotation position for clarity
-crop_annotate_x <- min(crop_data$logcropCd) - 0.1
+crop_annotate_x <- min(crop_data$logcropCd) - 1.5
 crop_annotate_y <- 1.5
 
 
@@ -262,6 +262,6 @@ combined_plot <- p1 + p2 + plot_layout(guides = "collect") & theme(legend.positi
 
 print(combined_plot)
 
-# combined_plot
-#ggsave(combined_plot, filename = "regression_model.tiff",width = 11,height = 5,units = "in",dpi = 300)
+combined_plot
+ggsave(combined_plot, filename = "regression_model.tiff",width = 11,height = 5,units = "in",dpi = 300)
 ```
