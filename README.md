@@ -22,3 +22,5 @@ The definitions of the parameters are:
 * Clay: soil clay content in a 0-20cm soil layer
 
 source: clay content in some sites were measured, otherwise the values were derived from SoilGrids — global gridded soil information 
+
+Cd_dynamics.Rmd describes the script for cadmium dynamics simulation and scenario analysis.
