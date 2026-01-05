@@ -19,19 +19,19 @@ The datasets supporting the findings of this study, including cadmium model inpu
 -Cd_regression_data.csv:
  Raw data to derive the cadmium regression model for soil-crop and soil-solution relationships. 
  The definitions of the parameters (columns) are:
-    * X: longtitude (WGS84, EPSG:4326)
-    * Y: latitude (WGS84,  EPSG:4326)
-    * land_use: land use type, as Paddy if the crop type is rice, otherwise Upland
-    * pH: soil pH measured in water
-    * SoilCdtot: Soil total Cd content in a 0-20cm soil layer (mg/kg)
-    * RiceCd: Cd content in rice grain (mg/kg)
-    * StrawCd: Cd content in rice straw (mg/kg)
-    * SoilCdavi: Cd concentration in soil solution in a 0-20cm soil layer (μg/L)
-    * OC: soil organic carbon content (%)
-    * Clay: soil clay content in a 0-20cm soil layer (%)
-    * source: clay content in some sites were measured (mea_clay), otherwise the values were derived from SoilGrids — global gridded soil information 
-    * code: ID of the site
-    * with_survey: if farm surveys were carried out at the sampled site (1 indicates with farm survey data)
+ * X: longtitude (WGS84, EPSG:4326)
+ * Y: latitude (WGS84,  EPSG:4326)
+ * land_use: land use type, as Paddy if the crop type is rice, otherwise Upland
+ * pH: soil pH measured in water
+ * SoilCdtot: Soil total Cd content in a 0-20cm soil layer (mg/kg)
+ * RiceCd: Cd content in rice grain (mg/kg)
+ * StrawCd: Cd content in rice straw (mg/kg)
+ * SoilCdavi: Cd concentration in soil solution in a 0-20cm soil layer (μg/L)
+ * OC: soil organic carbon content (%)
+ * Clay: soil clay content in a 0-20cm soil layer (%)
+ * source: clay content in some sites were measured (mea_clay), otherwise the values were derived from SoilGrids — global gridded soil information 
+ * code: ID of the site
+ * with_survey: if farm surveys were carried out at the sampled site (1 indicates with farm survey data)
 
 -historical_Cd_input.csv:
  input data for cadmium flux simulation in the historical period (1985-2019)
@@ -54,4 +54,4 @@ The datasets supporting the findings of this study, including cadmium model inpu
  * lime: annual mean lime application rate (kg/ha/yr)
  * scenario: different management scenarios
 
- The folder Figure_Source_Data contains the raw data underlying all figures in the Manuscript
+ The folder Figure_Source_Data contains the raw data underlying all Figures (Fig) and Extended Data Figures (EDFig) in the Manuscript
