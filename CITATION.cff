@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Xu
+  given-names: Donghao
+- family-names: Ros
+  given-names: Gerard H.
+- family-names: Liu
+  given-names: Pengqi
+- family-names: Zhu
+  given-names: Qichao
+- family-names: Zhang
+  given-names: Fusuo
+- family-names: de Vries
+  given-names: Wim
+title: Data and code for the manuscript "Large-scale nutrient management strategies shape acidification-induced risks for crop yields and food quality by cadmium"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2026-01-05
+url: "https://github.com/xu624/cadmium-management"
