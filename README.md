@@ -54,4 +54,31 @@ The datasets supporting the findings of this study, including cadmium model inpu
  * lime: annual mean lime application rate (kg/ha/yr)
  * scenario: different management scenarios
 
- The folder Figure_Source_Data contains the raw data underlying all Figures (Fig) and Extended Data Figures (EDFig) in the Manuscript
+ The folder spatial_data contains the spatial data underlying all maps in the Manuscript, with coordinate reference system of EPSG:4326
+ * dep_irr.shp :
+   Point-based deposition and irrigation samples in Qiyang Country in 2019. Value for deposition are in unit of g/ha/yr, for irrigaition are in unit of μg/L
+
+ * Qiyang_county.shp:
+   Boundary of Qiyang County.
+
+ * rice_cover.tiff:
+   Rice cultivation mask used to define interpolation grid at 1km * 1km.
+
+ * soil_crop_2019.shp :
+   Point-based soil-crop samples in Qiyang Country in 2019, including measured total soil and crop Cd content (SoilCdtot, RiceCd, StrawCd), soil avaiable Cd content (SoilCdavi), soil organic carbon content (OC, g/kg) and soil clay content (Clay, %), as well as if the samples were taken with survey data (with_survey = 1). 
+   Columns include: X, Y, land_use, SoilCdtot, RiceCd, StrawCd, SoilCdavi, OC, Clay, source, code, with_survey
+
+* spatial_deposition_Cd.shp :
+  Point-based Cd input of atmospheric deposition (g ha−1 yr−1) used as input for spatial interpolation.
+  Columns include: ID, X, Y, BNPR, BNPRLopt1, BNPRLopt2.
+  where BNPRLopt1 indicates the option 1 in BNPRLopt scenario to prioritize reducing manure Cd input, and BNPRLopt2 indicates the option 2 in BNPRLopt scenario to prioritize reducing atmospheric deposition Cd input.
+
+* spatial_lime.shp:
+  Point-based mean lime input (ton ha−1) every 5 years during 2020-2050, used as input for spatial interpolation.
+  Columns include: ID, X, Y, BNPRLopt1, BNPRLopt2.
+
+* spatial_manure_Cd.shp 
+  Point-based Cd input of manure (g ha−1 yr−1) used as input for spatial interpolation.
+  Columns include: ID, X, Y, BNPR, BNPRLopt1, BNPRLopt2.
+
+ 
