@@ -20,7 +20,7 @@ Source data used in this code can be found in Zenodo (DOI: 10.5281/zenodo.180786
 library(data.table)
 
 # load database
-pri_df <- fread("Data/Cd_regression_data.csv", header=TRUE, sep=",", skip = 2, fill=TRUE) 
+pri_df <- fread("model_data/Cd_regression_data.csv", header=TRUE, sep=",", skip = 2, fill=TRUE) 
 
 # add log transformations
 pri_df[,logclay := log10(Clay)]
@@ -288,7 +288,7 @@ writeData(wb, "panel_b", solution_data_long)
 
 # saveWorkbook(
 #   wb,
-#   "Data/Figure_Source_Data/SourceData_EDFig6.xlsx",
+#   "Figure_Source_Data/SourceData_EDFig6.xlsx",
 #   overwrite = TRUE
 # )
 
@@ -403,7 +403,7 @@ Cd_simulation <- function(cd_input, start_year = 1985) {
 ## 1.3 Import input and run Cd model
 ```{r}
 library(dplyr); library(tidyr)
-all_Cd_input <- read.csv("Data/historical_Cd_input.csv")
+all_Cd_input <- read.csv("model_data/historical_Cd_input.csv")
 
 non_cal_site <- unique(filter(all_Cd_input, soil_type == "Non-calcareous")$ID)
 
@@ -413,7 +413,7 @@ Cd_output <- all_Cd_input %>%
   ungroup()
 
 ## compare simulations with observations
-all_obs <- read.csv("Data/all_observation.csv")
+all_obs <- read.csv("model_data/all_observation.csv")
 
 all_sim <- Cd_output %>% 
   dplyr::select(ID, Year, soilCd, pH, SOC, soil_type) %>% 
@@ -566,7 +566,7 @@ combined_plot
 # )
 # 
 # ## Save figure source data
-# write.csv(plot_df, "Data/Figure_Source_Data/SourceData_EDFig1.csv", row.names = FALSE)
+# write.csv(plot_df, "Figure_Source_Data/SourceData_EDFig1.csv", row.names = FALSE)
 ```
 
 ### 1.3.2 generate Figure 2 and legend
@@ -708,7 +708,7 @@ writeData(
 
 # saveWorkbook(
 #   wb,
-#   "Data/Figure_Source_Data/SourceData_Fig2.xlsx",
+#   "Figure_Source_Data/SourceData_Fig2.xlsx",
 #   overwrite = TRUE
 # )
 ```
@@ -798,7 +798,7 @@ ggplot(data = crit_range)+
 #   dpi = 300
 # )
 # 
-# write.csv(crit_range, "Data/Figure_Source_Data/SourceData_EDFig5.csv", 
+# write.csv(crit_range, "Figure_Source_Data/SourceData_EDFig5.csv", 
 #           row.names = FALSE,
 #           fileEncoding = "UTF-8")
 
@@ -807,7 +807,7 @@ ggplot(data = crit_range)+
 # 2. Scenario analysis
 ## 2.1 Modelling results for scenarios BAU, BNP, BNPR and BNPL
 ```{r}
-scenario_Cd_input <- read.csv("Data/scenario_input_with_lime.csv")
+scenario_Cd_input <- read.csv("model_data/scenario_input_with_lime.csv")
 
 past_Cd_input <- all_Cd_input %>% 
   mutate(site = ID, scenario = "Past", lime = 0)
@@ -926,7 +926,7 @@ BAU_leaching
 # )
 # 
 # write.csv(BAU_Cd_leaching, 
-#           "Data/Figure_Source_Data/SourceData_EDFig2.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_EDFig2.csv", row.names = FALSE)
 ```
 ## 2.3 Total and critical cadmium inputs across scenarios and sites
 ```{r}
@@ -967,7 +967,7 @@ ggplot(data = all_scenario_cdin %>%
 #        )
 # 
 # write.csv(all_scenario_cdin %>% arrange(ID), 
-#           "Data/Figure_Source_Data/SourceData_EDFig3.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_EDFig3.csv", row.names = FALSE)
 
 ```
 
@@ -1122,7 +1122,7 @@ writeData(
 
 # saveWorkbook(
 #   wb,
-#   "Data/Figure_Source_Data/SourceData_EDFig4.xlsx",
+#   "Figure_Source_Data/SourceData_EDFig4.xlsx",
 #   overwrite = TRUE
 # )
 ```
@@ -1249,7 +1249,7 @@ combined_plot
 #        device = cairo_pdf)
 # 
 # write.csv(Cd_scenario_flux_gather,
-#           "Data/Figure_Source_Data/SourceData_Fig3.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_Fig3.csv", row.names = FALSE)
 ```
 
 ## 2.5 Impacts of management on soil pH and cadmium concentrations in soils and rice grain
@@ -1364,7 +1364,7 @@ combined_plot
 #        device = cairo_pdf)
 # 
 # write.csv(summary_riceCd,
-#           "Data/Figure_Source_Data/SourceData_Fig4.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_Fig4.csv", row.names = FALSE)
 ```
 
 # 3. Spatial analysis
@@ -1375,11 +1375,11 @@ library(raster)
 library(stars)
 library(gstat)
 
-QY_rast <- read_stars("Data/spatial_data/rice_cover.tiff") 
+QY_rast <- read_stars("spatial_data/rice_cover.tiff") 
 
-manure_Cd_sf <- st_read("Data/spatial_data/spatial_manure_Cd.shp")
+manure_Cd_sf <- st_read("spatial_data/spatial_manure_Cd.shp")
 
-QYBorder <- read_sf("Data/spatial_data/Qiyang_county.shp") 
+QYBorder <- read_sf("spatial_data/Qiyang_county.shp") 
 
 idw_1 <- idw(formula = BNPR ~ 1,
              locations = manure_Cd_sf,
@@ -1435,7 +1435,7 @@ plot_man <- ggplot()+
 
 
 ## generate Figure 5b
-deposition_Cd_sf <- st_read("Data/spatial_data/spatial_deposition_Cd.shp")
+deposition_Cd_sf <- st_read("spatial_data/spatial_deposition_Cd.shp")
 
 idw_4 <- idw(formula = BNPR ~ 1,
              locations = deposition_Cd_sf,
@@ -1518,14 +1518,14 @@ man_dep_Cd_long <- manure_Cd_long %>%
   bind_rows(deposition_Cd_long)
 
 # write.csv(man_dep_Cd_long,
-#           "Data/Figure_Source_Data/SourceData_Fig5.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_Fig5.csv", row.names = FALSE)
 
 ```
 
 ## 3.2 Spatial variations in the required lime application rate under different management scenarios
 
 ```{r}
-lime_sf <- st_read("Data/spatial_data/spatial_lime_in.shp")
+lime_sf <- st_read("spatial_data/spatial_lime_in.shp")
 
 idw_4 <- idw(formula = BNPRLopt1 ~ 1,
              locations = lime_sf,
@@ -1582,6 +1582,7 @@ ggplot()+
 #        width = 10,
 #        height = 5.5,
 #        device = cairo_pdf)
+
 colnames(lime_sf)[c(2, 3)] <- c("BNPRLopt", "BNPRLopt(dep)")
 lime_long <- lime_sf %>%
   st_drop_geometry() %>%
@@ -1592,7 +1593,7 @@ lime_long <- lime_sf %>%
   )
 
 # write.csv(lime_long,
-#           "Data/Figure_Source_Data/SourceData_Fig6.csv", row.names = FALSE)
+#           "Figure_Source_Data/SourceData_Fig6.csv", row.names = FALSE)
 
 
 ```

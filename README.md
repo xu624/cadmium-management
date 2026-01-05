@@ -10,7 +10,7 @@ Corresponding authors are qichaozhu@126.com; donghao.xu@wur.nl
 
 Cd_dynamics.Rmd describes the script for regression models, cadmium dynamics simulation, and scenario analysis, together with data analysis and visualization. 
 
-The datasets supporting the findings of this study, including cadmium model inputs and outputs, scenario analysis datasets, and source data underlying the main and Extended Data figures are stored in folder Data, including:
+The folder model_data includes datasets supporting the findings of this study, including cadmium model inputs and outputs, scenario analysis datasets, including:
 
 -all_observation.csv:
  Observations in the year of 2014 and 2019 for soil total cadmium content (SoilCd, mg/kg), soil organic carbon content (SOC, %) and soil pH (pH)
@@ -81,4 +81,4 @@ The datasets supporting the findings of this study, including cadmium model inpu
   Point-based Cd input of manure (g ha−1 yr−1) used as input for spatial interpolation.
   Columns include: ID, X, Y, BNPR, BNPRLopt1, BNPRLopt2.
 
- 
+The folder Figure_Source_data contains source data underlying the main and Extended Data figures
