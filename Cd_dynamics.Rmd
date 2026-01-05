@@ -20,7 +20,7 @@ Source data used in this code can be found in Zenodo (DOI: 10.5281/zenodo.180786
 library(data.table)
 
 # load database
-pri_df <- fread("Data/pri_Cd_data.csv", header=TRUE, sep=",", skip = 2, fill=TRUE) 
+pri_df <- fread("Data/Cd_regression_data.csv", header=TRUE, sep=",", skip = 2, fill=TRUE) 
 
 # add log transformations
 pri_df[,logclay := log10(Clay)]
