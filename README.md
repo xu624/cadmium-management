@@ -74,7 +74,7 @@ The folder model_data includes datasets supporting the findings of this study, i
   where BNPRLopt1 indicates the option 1 in BNPRLopt scenario to prioritize reducing manure Cd input, and BNPRLopt2 indicates the option 2 in BNPRLopt scenario to prioritize reducing atmospheric deposition Cd input.
 
 * spatial_lime.shp:
-  Point-based mean lime input (ton ha−1) every 5 years during 2020-2050, used as input for spatial interpolation.
+  Point-based total lime input (ton CaCO3 ha−1) during 2020-2050, used as input for spatial interpolation.
   Columns include: ID, X, Y, BNPRLopt1, BNPRLopt2.
 
 * spatial_manure_Cd.shp 

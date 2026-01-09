@@ -154,7 +154,7 @@ crop_data[!crop == "straw",pred := crop_coeffs["logsoilCd"]*logsoilCd + crop_coe
                     
 ```
 
-### 1.1.1 Generate Extended Data Fig. 5
+### 1.1.1 Generate Extended Data Fig. 6
 
 Below we illustrate the modeled results.
 
@@ -753,10 +753,7 @@ crit_Cd_gather <- crit_range %>%
   dplyr::select(-ID)
 
 crit_range$item <- factor(crit_range$item, 
-                          levels = c("crit_pH", "crit_soilCd", "crit_soluCd"), 
-                          labels = c("Critical pH", 
-                                     "Critical soil total Cd", 
-                                     "Critical soil solution Cd"))
+                          levels = c("crit_pH", "crit_soilCd", "crit_soluCd"))
 ```
 ### 1.5.1 Generate Extended Data Fig. 5
 ```{r}
@@ -765,11 +762,18 @@ panel_labels <- data.frame(
   label = c("(a)", "(b)", "(c)")
 )
 
+y_labeller <- c(
+  crit_pH      = "Critical pH",
+  crit_soilCd  = "Critical soil Cd (mg kg\u207B\u00B9)",
+  crit_soluCd  = "Critical solution Cd (\u03BCg L\u207B\u00B9)"
+)
+
 ggplot(data = crit_range)+
   geom_boxplot(aes(x = soil_type, y = value, fill = soil_type), width = 0.5)+ 
   stat_summary(aes(x = soil_type, y = value), fun = "mean", 
     geom = "point", shape = 23, size = 3)+
-  facet_wrap(~item, scales = "free_y", switch = 'y')+
+  facet_wrap(~item, scales = "free_y", switch = 'y', 
+             labeller = labeller(item = y_labeller))+
   geom_text(
     data = panel_labels,
     aes(x = -Inf, y = Inf, label = label),
@@ -978,33 +982,80 @@ scenario_dep_man <- all_scenario_input %>% filter(Year == 2020)
 manure_compare <- scenario_dep_man %>% 
   filter(!ID %in% unique(plot_df[plot_df$outlier==1, "ID"])) %>% 
   dplyr::select(ID, man, soil_type, scenario) %>% 
-  filter(!scenario %in% c("Past", "BNPL")) %>% 
+  filter(!scenario %in% c("Past", "BNP", "BNPL")) %>% 
   arrange(ID)
 
 manure_compare$scenario <- factor(manure_compare$scenario, 
-                                  levels = c( "BAU", "BNP", 
-                                              "BNPRLopt","BNPRLopt(dep)", "BNPR"))
+                                  levels = c( "BAU", 
+                                              "BNPRLopt","BNPRLopt(dep)", "BNPR"),
+                               labels = c("BAU", 
+                                             expression("BNPRL\nopt"),
+                                          expression("BNPRL\nopt(dep)"), "BNPR"))
 
 mean_manure <- manure_compare %>% 
-  group_by(scenario) %>% 
+  group_by(scenario, soil_type) %>% 
   reframe(mean_manure = mean(man)/0.67) %>%     # mean manure Cd at 0.67 mg/kg
-  mutate(ratio = mean_manure/max(mean_manure))
+  ungroup() %>% 
+  group_by(soil_type) %>% 
+  reframe(max_manure = max(mean_manure), 
+          ratio = mean_manure/max_manure, 
+          scenario = scenario) 
 
-# generate Extended Data Fig.4
-h1 <- ggplot(data = mean_manure)+
+h1 <- ggplot(data = mean_manure %>% filter(soil_type == "Calcareous"))+
   geom_bar(aes(x = scenario, y = ratio, fill = scenario),
            color = "black", stat = "identity", position="stack", width=0.4)+
   scale_fill_npg(name = "Scenario")+
   scale_y_continuous(labels = scales::percent)+
   xlab("")+
-  ylab(expression(paste("Manure recycling ratio (%)",seq="")))+
+  ylab(expression(paste("Manure recycling (%)",seq="")))+
   theme_bw()+
   theme(text = element_text(size = 10, family="serif"), 
         legend.position = "none")
 
-h2 <- ggplot(manure_compare, 
+h2 <- ggplot(manure_compare %>% filter(soil_type == "Calcareous"), 
        aes(x = man/0.67, color=factor(scenario)))+
   stat_ecdf()+
+  scale_x_continuous(limits = c(0, 15))+
+  scale_y_continuous(labels = scales::percent)+
+  scale_color_npg(name="Scenario")+
+  ggtitle("(c)")+
+  xlab(expression(paste("Manure dose (tons ha"^"-1", ")",seq="")))+
+  ylab("Cumulative frequency") +
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5),  
+        legend.position = "bottom", 
+        text = element_text(size = 12,family="serif"), 
+        plot.margin = unit(c(0.1, 0.2, 0.1, 0.1), "cm"))
+
+library(ggpubr)
+grob_h1 <- ggplotGrob(h1)
+
+# Overlay h1 in the blank space of h2
+man_calcareous <- h2 + 
+  annotation_custom(grob = grob_h1, 
+                    xmin = 4, xmax = 16,  # Adjust placement based on your data
+                    ymin = -0.1, ymax = 0.65)  # Adjust placement based on your data
+
+
+h3 <- ggplot(data = mean_manure %>% filter(soil_type != "Calcareous"))+
+  geom_bar(aes(x = scenario, y = ratio, fill = scenario),
+           color = "black", stat = "identity", position="stack", width=0.4)+
+  scale_fill_npg(name = "Scenario")+
+  scale_y_continuous(labels = scales::percent)+
+  xlab("")+
+  ylab(expression(paste("Manure recycling (%)",seq="")))+
+  theme_bw()+
+  theme(text = element_text(size = 10, family="serif"), 
+        legend.position = "none")
+
+h4 <- ggplot(manure_compare %>% filter(soil_type != "Calcareous"), 
+       aes(x = man/0.67, color=factor(scenario)))+
+  stat_ecdf()+
+  scale_x_continuous(limits = c(0, 15))+
   scale_y_continuous(labels = scales::percent)+
   scale_color_npg(name="Scenario")+
   ggtitle("(a)")+
@@ -1017,49 +1068,97 @@ h2 <- ggplot(manure_compare,
         panel.background = element_rect(fill = "white"),
         plot.title = element_text(hjust = 0.5),  
         legend.position = "bottom", 
-        text = element_text(size = 14,family="serif"), 
-        plot.margin = unit(c(0.1, 0, 0.1, 0.1), "cm"))
+        text = element_text(size = 12,family="serif"), 
+        plot.margin = unit(c(0.1, 0.2, 0.1, 0.1), "cm"))
 
 library(ggpubr)
-grob_h1 <- ggplotGrob(h1)
+grob_h2 <- ggplotGrob(h3)
 
 # Overlay h1 in the blank space of h2
-comb_plot_man <- h2 + 
-  annotation_custom(grob = grob_h1, 
-                    xmin = 3.65, xmax = 11.95,  # Adjust placement based on your data
-                    ymin = -0.05, ymax = 0.6)  # Adjust placement based on your data
+man_noncal <- h4 + 
+  annotation_custom(grob = grob_h2, 
+                    xmin = 4, xmax = 16,  # Adjust placement based on your data
+                    ymin = -0.1, ymax = 0.65)  # Adjust placement based on your data
 
-comb_plot_man
 
 dep_compare <- scenario_dep_man %>% 
   filter(!ID %in% unique(plot_df[plot_df$outlier==1, "ID"])) %>% 
   dplyr::select(ID, dep, soil_type, scenario) %>% 
-  filter(!scenario %in% c("Past", "BNPL"))%>% 
+  filter(!scenario %in% c("Past", "BNP", "BNPL"))%>% 
   arrange(ID)
 
 dep_compare$scenario <- factor(dep_compare$scenario, 
-                                  levels = c("BAU", "BNP", 
-                                             "BNPRLopt","BNPRLopt(dep)", "BNPR"))
+                                  levels = c("BAU", 
+                                             "BNPRLopt","BNPRLopt(dep)", "BNPR"),
+                               labels = c("BAU", 
+                                             expression("BNPRL\nopt"),
+                                          expression("BNPRL\nopt(dep)"), "BNPR"))
 
 mean_dep <- dep_compare %>% 
-  group_by(scenario) %>% 
+  group_by(scenario, soil_type) %>% 
   reframe(mean_dep = mean(dep)) %>% 
-  mutate(ratio = mean_dep/max(mean_dep))
+  ungroup() %>% 
+  group_by(soil_type) %>% 
+  reframe(max_dep = max(mean_dep), 
+          ratio = mean_dep/max_dep, 
+          scenario = scenario) 
 
-h1 <- ggplot(data = mean_dep)+
+h5 <- ggplot(data = mean_dep %>% filter(soil_type == "Calcareous"))+
   geom_bar(aes(x = scenario, y = ratio, fill = scenario),
            color = "black", stat = "identity", position="stack", width=0.4)+
   scale_fill_npg(name = "Scenario")+
   scale_y_continuous(labels = scales::percent)+
   xlab("")+
-  ylab(expression(paste("Ratio to current deposition rate (%)",seq="")))+
+  ylab(expression(paste("Deposition ratio (%)",seq="")))+
   theme_bw()+
   theme(text = element_text(size = 10, family="serif"), 
         legend.position = "none")
 
-h2 <- ggplot(dep_compare, 
+h6 <- ggplot(dep_compare %>% filter(soil_type == "Calcareous"), 
        aes(x = dep, color=factor(scenario)))+
   stat_ecdf()+
+  scale_x_continuous(limits = c(0, 25))+
+  scale_y_continuous(labels = scales::percent)+
+  scale_color_npg(name="Scenario")+
+  xlab(expression(paste("Cd deposition rate (g ha"^"-1", ")",seq="")))+
+  ggtitle("(d)")+
+  ylab("") +
+  theme_bw()+
+  theme(axis.ticks.length=unit(0.1, 'cm'),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5),  
+        legend.position = "bottom", 
+        text = element_text(size = 12,family="serif"), 
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"), 
+        axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank())
+
+grob_h3 <- ggplotGrob(h5)
+
+# Overlay h1 in the blank space of h2
+dep_calcareous <- h6 + 
+  annotation_custom(grob = grob_h3, 
+                    xmin = 5.5, xmax = 26,  # Adjust placement based on your data
+                    ymin = -0.1, ymax = 0.65)  # Adjust placement based on your data
+
+
+h7 <- ggplot(data = mean_dep %>% filter(soil_type != "Calcareous"))+
+  geom_bar(aes(x = scenario, y = ratio, fill = scenario),
+           color = "black", stat = "identity", position="stack", width=0.4)+
+  scale_fill_npg(name = "Scenario")+
+  scale_y_continuous(labels = scales::percent)+
+  xlab("")+
+  ylab(expression(paste("Deposition ratio (%)",seq="")))+
+  theme_bw()+
+  theme(text = element_text(size = 10, family="serif"), 
+        legend.position = "none")
+
+h8 <- ggplot(dep_compare %>% filter(soil_type != "Calcareous"), 
+       aes(x = dep, color=factor(scenario)))+
+  stat_ecdf()+
+  scale_x_continuous(limits = c(0, 25))+
   scale_y_continuous(labels = scales::percent)+
   scale_color_npg(name="Scenario")+
   xlab(expression(paste("Cd deposition rate (g ha"^"-1", ")",seq="")))+
@@ -1072,31 +1171,43 @@ h2 <- ggplot(dep_compare,
         panel.background = element_rect(fill = "white"),
         plot.title = element_text(hjust = 0.5),  
         legend.position = "bottom", 
-        text = element_text(size = 14,family="serif"), 
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0), "cm"))
+        text = element_text(size = 12,family="serif"), 
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"), 
+        axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank())
 
-grob_h1 <- ggplotGrob(h1)
+grob_h4 <- ggplotGrob(h7)
 
 # Overlay h1 in the blank space of h2
-comb_plot_dep <- h2 + 
-  annotation_custom(grob = grob_h1, 
-                    xmin =6, xmax = 20,  # Adjust placement based on your data
-                    ymin = -0.05, ymax = 0.6)  # Adjust placement based on your data
+dep_noncal <- h8 + 
+  annotation_custom(grob = grob_h4, 
+                    xmin = 5.5, xmax = 26,  # Adjust placement based on your data
+                    ymin = -0.1, ymax = 0.65)  # Adjust placement based on your data
 
-comb_plot_dep 
 
 library(lemon)
-com_plot <- grid_arrange_shared_legend(comb_plot_man, comb_plot_dep, ncol=2, 
-                                       position="bottom")
 
-plot(com_plot) 
+combined_plot <- (man_noncal | dep_noncal) /
+                 (man_calcareous | dep_calcareous) +
+  plot_layout(
+    guides = "collect",
+    widths = c(1, 1),
+    heights = c(1, 1)
+  ) &
+  theme(
+    legend.position = "bottom",
+    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "mm")
+  )
 
-# ggsave(com_plot, filename = "Extended data/ED_Fig4.jpg",,
-#   width = 13.5,
-#   height = 6,
-#   units = "in",
-#   dpi = 300
-# )
+
+plot(combined_plot ) 
+
+ggsave(combined_plot , filename = "Extended data/ED_Fig4.jpg",,
+       width = 180,
+       height = 170,
+       units = "mm",
+  dpi = 300
+)
 
 wb = createWorkbook()
 
@@ -1533,45 +1644,54 @@ idw_4 <- idw(formula = BNPRLopt1 ~ 1,
              idp = 5) %>%
   as.data.frame() %>% dplyr::select(c(1:3)) %>%
   drop_na() %>%
-  mutate(range = case_when(var1.pred>=4 ~ ">4",
-                           var1.pred<4 & var1.pred>=2 ~  "2-4",
-                           var1.pred<2 & var1.pred>=1 ~ "1-2",
-                           var1.pred<1& var1.pred>=0.1~ "0-1", 
-                           var1.pred<0.1~"Not required"
+  mutate(range = case_when(var1.pred>=25 ~ ">25",
+                           var1.pred<25 & var1.pred>=20 ~  "20-25",
+                           var1.pred<20 & var1.pred>=15 ~ "15-20",
+                           var1.pred<15& var1.pred>=10~ "10-15", 
+                           var1.pred<10& var1.pred>=1~ "0-10", 
+                           var1.pred<1~"Not required"
                            )
          )
 
 idw_4$range <- factor(idw_4$range,
-                      levels = c(">4", "2-4", "1-2", "0-1", "Not required"))
+                      levels = c(">25", "20-25", "15-20", "10-15", "0-10",
+                                 "Not required"))
 
-idw_6 <- idw(formula =BNPRLopt2~ 1,
+idw_5 <- idw(formula =BNPRLopt2~ 1,
              locations = lime_sf,
              newdata = QY_rast, 
              idp = 5) %>% 
   as.data.frame() %>% dplyr::select(c(1:3)) %>% 
   drop_na()%>%
-  mutate(range = case_when(var1.pred>=4 ~ ">4",
-                           var1.pred<4 & var1.pred>=2 ~  "2-4",
-                           var1.pred<2 & var1.pred>=1 ~ "1-2",
-                           var1.pred<1& var1.pred>=0.1~ "0-1", 
-                           var1.pred<0.1~"Not required"
+  mutate(range = case_when(var1.pred>=25 ~ ">25",
+                           var1.pred<25 & var1.pred>=20 ~  "20-25",
+                           var1.pred<20 & var1.pred>=15 ~ "15-20",
+                           var1.pred<15& var1.pred>=10~ "10-15", 
+                           var1.pred<10& var1.pred>=1~ "0-10", 
+                           var1.pred<1~"Not required"
                            )
          )
 
-idw_6$range <- factor(idw_6$range,
-                      levels = c(">4", "2-4", "1-2", "0-1", "Not required"))
+idw_5$range <- factor(idw_5$range,
+                      levels = c(">25", "20-25", "15-20", "10-15", "0-10",
+                                 "Not required"))
 
 idw_lime <- rbind(idw_4 %>% mutate(scenario = "BNPRLopt"), 
-                  idw_6 %>% mutate(scenario = "BNPRLopt(dep)"))
+                  idw_5 %>% mutate(scenario = "BNPRLopt(dep)"))
 
 idw_lime_spread <- idw_lime[,-4] %>% 
   spread(key = scenario, value = var1.pred)
 
-## generate Figure 6
 ggplot()+
   geom_raster(data=idw_lime, aes(x=x, y=y, fill=range))+
   geom_sf(data = QYBorder, color="black")+
-  scale_fill_locuszoom(name = expression("Lime input"))+
+  scale_fill_manual(name = expression("Lime input"), 
+                    values = c("Not required" = "grey", 
+                               "0-10" = "#A6D96A", 
+                               "10-15" = "skyblue", 
+                               "15-20" = "#0571B0", 
+                               "20-25" = "orange", 
+                               ">25" = "tomato"))+
   facet_wrap(~scenario)+
   theme_void()+
   theme(plot.title = element_text(hjust = 0.5),
