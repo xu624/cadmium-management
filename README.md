@@ -58,12 +58,6 @@ The folder model_data includes datasets supporting the findings of this study, i
  * dep_irr.shp :
    Point-based deposition and irrigation samples in Qiyang Country in 2019. Value for deposition are in unit of g/ha/yr, for irrigaition are in unit of μg/L
 
- * Qiyang_county.shp:
-   Boundary of Qiyang County.
-
- * rice_cover.tiff:
-   Rice cultivation mask used to define interpolation grid at 1km * 1km.
-
  * soil_crop_2019.shp :
    Point-based soil-crop samples in Qiyang Country in 2019, including measured total soil and crop Cd content (SoilCdtot, RiceCd, StrawCd), soil avaiable Cd content (SoilCdavi), soil organic carbon content (OC, g/kg) and soil clay content (Clay, %), as well as if the samples were taken with survey data (with_survey = 1). 
    Columns include: X, Y, land_use, SoilCdtot, RiceCd, StrawCd, SoilCdavi, OC, Clay, source, code, with_survey
@@ -80,5 +74,3 @@ The folder model_data includes datasets supporting the findings of this study, i
 * spatial_manure_Cd.shp 
   Point-based Cd input of manure (g ha−1 yr−1) used as input for spatial interpolation.
   Columns include: ID, X, Y, BNPR, BNPRLopt1, BNPRLopt2.
-
-The folder Figure_Source_data contains source data underlying the main and Extended Data figures
