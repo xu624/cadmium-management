@@ -190,10 +190,10 @@ p1 <- ggplot(crop_data)+
       scale_shape_manual(values = c(1, 16))+
       theme_minimal() +
       theme(
-        text = element_text(size = 12),
+        text = element_text(size = 12, family="serif"),
         plot.title = element_text(hjust = 0.5),
-        legend.title = element_text(size = 12),    # Legend title font size
-        legend.text = element_text(size = 10),     # Legend text font size
+        legend.title = element_text(size = 12, family="serif"),    # Legend title font size
+        legend.text = element_text(size = 10, family="serif"),     # Legend text font size
         legend.position = "bottom",        # Legend position
       ) +
       guides(
@@ -241,10 +241,10 @@ p2 <- ggplot(soil_solution)+
       scale_shape_manual(values = c(1, 16))+
       theme_minimal() +
       theme(
-        text = element_text(size = 12),
+        text = element_text(size = 12, family="serif"),
         plot.title = element_text(hjust = 0.5),
-        legend.title = element_text(size = 12),    # Legend title font size
-        legend.text = element_text(size = 10),     # Legend text font size
+        legend.title = element_text(size = 12, family="serif"),    # Legend title font size
+        legend.text = element_text(size = 10, family="serif"),     # Legend text font size
         legend.position = "bottom",        # Legend position
       ) +
       guides(
@@ -402,7 +402,7 @@ Cd_simulation <- function(cd_input, start_year = 1985) {
 
 ## 1.3 Import input and run Cd model
 ```{r}
-library(dplyr); library(tidyr)
+library(dplyr); library(tidyr); library(openxlsx)
 all_Cd_input <- read.csv("model_data/historical_Cd_input.csv")
 
 non_cal_site <- unique(filter(all_Cd_input, soil_type == "Non-calcareous")$ID)
@@ -564,9 +564,10 @@ combined_plot
 #   units = "in",
 #   dpi = 300
 # )
-# 
+#
+
 # ## Save figure source data
-# write.csv(plot_df, "Figure_Source_Data/SourceData_EDFig1.csv", row.names = FALSE)
+# write.xlsx(plot_df, "Figure_Source_Data/SourceData_EDFig1.csv", rowNames = FALSE)
 ```
 
 ### 1.3.2 generate Figure 2 and legend
@@ -690,7 +691,7 @@ com_Cd_sim
 #        device = cairo_pdf)
 
 ## Save Figure source data
-library(openxlsx)
+
 wb <- createWorkbook()
 
 addWorksheet(wb, "panel_a")
@@ -715,12 +716,13 @@ writeData(
 
 ## 1.5 Calculate critical input
 ```{r}
+ML <- 0.2 / 0.85          # critical rice cadmium content in dry weight (0.2 mg/kg in fresh weight, assuming 15% water content)
 crit_Cd_noncal <- Cd_output %>% 
   filter(Year == 2019) %>%      # use the value in the last year
-  mutate(crit_pH_Cd = (log10(0.23) - crop_coeffs["logsoilCd"]*log10(soilCd) - crop_coeffs["logSOC"]*log10(SOC) - crop_coeffs["logclay"]*log10(clay) - crop_coeffs["cropgrain"])/crop_coeffs["pH"],
+  mutate(crit_pH_Cd = (log10(ML) - crop_coeffs["logsoilCd"]*log10(soilCd) - crop_coeffs["logSOC"]*log10(SOC) - crop_coeffs["logclay"]*log10(clay) - crop_coeffs["cropgrain"])/crop_coeffs["pH"],
          crit_pH = ifelse(crit_pH_Cd < 5.5, 5.5, crit_pH_Cd),
          new_riceCd = 10^(crop_coeffs["logsoilCd"]*log10(soilCd) + crop_coeffs["pH"]*crit_pH + crop_coeffs["logSOC"]*log10(SOC) + crop_coeffs["logclay"]*log10(clay) + crop_coeffs["cropgrain"]),
-         crit_riceCd = 0.23,
+         crit_riceCd = ML,
          crit_soilCd = 10^( (log10(crit_riceCd) - (+ crop_coeffs["cropgrain"] + crop_coeffs["logSOC"]*log10(SOC) + crop_coeffs["logclay"]*log10(clay) + crop_coeffs["pH"]* crit_pH))/crop_coeffs["logsoilCd"]),
          crit_soluCd = 10^(solu_coeffs["logsoilCd"] * log10(crit_soilCd) + solu_coeffs["logSOC"]*log10(SOC) + solu_coeffs["logclay"]*log10(clay) + solu_coeffs["pH"]*crit_pH + solu_coeffs["land_usePaddy"]),
          crit_Cd_rice = crit_riceCd * rice_yield, 
@@ -772,8 +774,9 @@ ggplot(data = crit_range)+
   geom_boxplot(aes(x = soil_type, y = value, fill = soil_type), width = 0.5)+ 
   stat_summary(aes(x = soil_type, y = value), fun = "mean", 
     geom = "point", shape = 23, size = 3)+
-  facet_wrap(~item, scales = "free_y", switch = 'y', 
-             labeller = labeller(item = y_labeller))+
+  facet_wrap(~item, scales = "free_y", 
+             labeller = labeller(item = y_labeller), 
+             strip.position = "left")+
   geom_text(
     data = panel_labels,
     aes(x = -Inf, y = Inf, label = label),
@@ -802,8 +805,8 @@ ggplot(data = crit_range)+
 #   dpi = 300
 # )
 # 
-# write.csv(crit_range, "Figure_Source_Data/SourceData_EDFig5.csv", 
-#           row.names = FALSE,
+# write.xlsx(crit_range, "Figure_Source_Data/SourceData_EDFig5.xlsx",
+#           rowNames = FALSE,
 #           fileEncoding = "UTF-8")
 
 ```
@@ -858,6 +861,7 @@ OPT_Cd_output <- all_scenario_input %>%
 ```
 
 ## 2.2 Effects of soil properties on Cd concentration and Cd leaching in BAU scenario
+(Extended Data Fig. 2)
 ```{r}
 BAU_Cd_leaching <- BAU_Cd_output %>% 
   dplyr::select(ID, clay, SOC, pH, Cd_solu, lea) %>% 
@@ -881,10 +885,7 @@ BAU_Cd_leaching$clay_level <- factor(BAU_Cd_leaching$clay_level,
                                                "Loamy (18-35%)", 
                                                "Sandy (<18%)" 
                                                ))
-```
 
-###2.2.1 generate Extended Data Fig. 2
-```{r}
 h1 <- ggplot(data = BAU_Cd_leaching)+
   geom_point(aes(x = pH, y = Cd_solu, color = soc_level, alpha = clay_level))+
   xlim(c(4.3, 7))+
@@ -918,7 +919,9 @@ h2 <- ggplot(data = BAU_Cd_leaching)+
 # Combine p1 and p2 with a shared legend
 BAU_leaching <- h1 + h2 + 
   plot_layout(guides = "collect") &  # Collect and share legends
-  theme(legend.position = "right")  # Place the legend at the bottom
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))  # Place the legend at the bottom
 
 BAU_leaching
 
@@ -929,9 +932,10 @@ BAU_leaching
 #   dpi = 300    
 # )
 # 
-# write.csv(BAU_Cd_leaching, 
-#           "Figure_Source_Data/SourceData_EDFig2.csv", row.names = FALSE)
+# write.xlsx(BAU_Cd_leaching, 
+#           "Figure_Source_Data/SourceData_EDFig2.csv", rowNames = FALSE)
 ```
+
 ## 2.3 Total and critical cadmium inputs across scenarios and sites
 ```{r}
 all_scenario_cdin <- all_scenario_input %>% 
@@ -961,17 +965,20 @@ ggplot(data = all_scenario_cdin %>%
   ylab(expression(paste("Cadmium input (g ha"^"-1", " yr"^"-1" ,")",seq="")))+
   theme_bw()+
   theme(text = element_text(size = 14, family="serif"), 
-        legend.position = "none")
+        legend.position = "none",
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "white"))
+
 
 # ggsave(filename = "Extended data/ED_Fig3.jpg",
-#        width = 10,           
-#        height = 5,          
-#        units = "in",         
-#        dpi = 300           
+#        width = 10,
+#        height = 5,
+#        units = "in",
+#        dpi = 300
 #        )
 # 
-# write.csv(all_scenario_cdin %>% arrange(ID), 
-#           "Figure_Source_Data/SourceData_EDFig3.csv", row.names = FALSE)
+# write.xlsx(all_scenario_cdin %>% arrange(ID),
+#           "Figure_Source_Data/SourceData_EDFig3.xlsx", rowNames = FALSE)
 
 ```
 
@@ -1202,7 +1209,7 @@ combined_plot <- (man_noncal | dep_noncal) /
 
 plot(combined_plot ) 
 
-ggsave(combined_plot , filename = "Extended data/ED_Fig4.jpg",,
+ggsave(combined_plot , filename = "Extended data/ED_Fig4.jpg",
        width = 180,
        height = 170,
        units = "mm",
@@ -1241,10 +1248,11 @@ writeData(
 ## 2.4 Effects of management scenarios on cadmium inputs and outputs
 ```{r}
 Cd_scenario_output <- rbind(BAU_Cd_output, BNP_Cd_output, BNPR_Cd_output,
-                            BNPL_Cd_output, BNPRL_Cd_output)%>% 
+                            BNPL_Cd_output, BNPRL_Cd_output, OPT_Cd_output) %>% 
   filter(!ID %in% unique(plot_df[plot_df$outlier==1, "ID"]))
 
 Cd_scenario_flux_summary <- Cd_scenario_output %>% 
+  filter(scenario != "BNPRLopt(dep)") %>% 
   dplyr::select(Year, dep, irr, fer, man, crop, lea, scenario, soil_type) %>% 
   mutate(scenario = ifelse(Year<2020, "Past", scenario)) %>% 
   group_by(scenario, soil_type) %>% 
@@ -1266,8 +1274,8 @@ Cd_scenario_flux_gather <- Cd_scenario_flux_summary %>%
 Cd_scenario_flux_gather$source <- factor(Cd_scenario_flux_gather$source, 
                               levels = c("man", "fer",  "irr","dep", "lea", "crop", "acc"))
 
-crit_Cd_cal <- mean(crit_Cd_in[crit_Cd_in$soil_type =="Calcareous", ]$crit_in)
-crit_Cd_non_cal <- mean(crit_Cd_in[crit_Cd_in$soil_type !="Calcareous",]$crit_in)
+crit_Cd_cal <- mean(all_scenario_cdin[all_scenario_cdin$variable== "critical input" & all_scenario_cdin$soil_type == "Calcareous", "value"])
+crit_Cd_non_cal <- mean(all_scenario_cdin[all_scenario_cdin$variable== "critical input" & all_scenario_cdin$soil_type == "Non-calcareous", "value"])
 
 # Generate Figure 3
 h1 <- ggplot()+
@@ -1279,7 +1287,7 @@ h1 <- ggplot()+
                          filter(soil_type == "Non-calcareous"), flux=="Output"), 
                    aes(x+0.4, amount, fill=source), color="black",
                    stat='identity', width = 0.3)+
-  geom_hline(yintercept = crit_Cd_cal, 
+  geom_hline(yintercept = crit_Cd_non_cal, 
              linetype = 2,
               color="black")+
   scale_fill_manual(values = c('#DC0000B2','#F3D266', '#96C37D', 
@@ -1315,7 +1323,7 @@ h2 <- ggplot()+
                          filter(soil_type != "Non-calcareous"), flux=="Output"), 
                    aes(x+0.4, amount, fill=source), color="black",
                    stat='identity', width = 0.3)+
-  geom_hline(yintercept = crit_Cd_non_cal, 
+  geom_hline(yintercept = crit_Cd_cal, 
              linetype = 2,
               color="black")+
   scale_y_continuous(limits = c(-5, 16))+
@@ -1359,15 +1367,15 @@ combined_plot
 #        width = 3.5, height = 3,
 #        device = cairo_pdf)
 # 
-# write.csv(Cd_scenario_flux_gather,
-#           "Figure_Source_Data/SourceData_Fig3.csv", row.names = FALSE)
+# write.xlsx(Cd_scenario_flux_gather,
+#           "Figure_Source_Data/SourceData_Fig3.xlsx", rowNames = FALSE)
 ```
 
 ## 2.5 Impacts of management on soil pH and cadmium concentrations in soils and rice grain
 ```{r}
 scenario_summary <- Cd_scenario_output %>%
   dplyr::select(ID, Year, pH, soilCd, Cd_rice, soil_type, scenario) %>% 
-  # filter(Year>=2020) %>% 
+  filter(scenario != "BNPRLopt(dep)") %>% 
   group_by(Year, scenario, soil_type) %>% 
   reframe(
     mean_pH = mean(pH),
@@ -1450,7 +1458,7 @@ h3 <- ggplot(summary_riceCd,
               alpha = 0.2, color = NA) + 
   scale_color_npg()+
   scale_fill_npg()+
-  geom_abline(slope = 0, intercept = 0.23, color= "red", 
+  geom_abline(slope = 0, intercept = ML, color= "red", 
               linetype = "dashed", linewidth = 0.5)+
   facet_wrap(~scenario, ncol = 5) +                    
   labs(
@@ -1474,23 +1482,31 @@ combined_plot
 #        height = 8,
 #        device = cairo_pdf)
 # 
-# write.csv(summary_riceCd,
-#           "Figure_Source_Data/SourceData_Fig4.csv", row.names = FALSE)
+# write.xlsx(summary_riceCd,
+#           "Figure_Source_Data/SourceData_Fig4.xlsx", rowNames = FALSE)
 ```
 
 # 3. Spatial analysis
 ## 3.1 Spatial variation in cadmium inputs by manure and deposition under different management scenarios
+Only possible with given land use raster file at 1km*1km and shapefile
+
+Administrative boundary data (shapefile) obtained from the geoBoundaries project
+which are publicly available from the geoBoundaries website (Open Data Commons Open Database License, ODbL).
+
+The land use dataset used to derive the paddy soil coverage was obtained from 
+the Resource and Environment Science and Data Platform (Chinese Academy of Sciences, accessed in 2023). 
+
 ```{r}
 library(sf)
 library(raster)
 library(stars)
 library(gstat)
 
-QY_rast <- read_stars("spatial_data/rice_cover.tiff") 
+# QY_rast <- read_stars("spatial_data/rice_cover.tiff")
 
 manure_Cd_sf <- st_read("spatial_data/spatial_manure_Cd.shp")
 
-QYBorder <- read_sf("spatial_data/Qiyang_county.shp") 
+# QYBorder <- read_sf("spatial_data/Qiyang_county.shp")
 
 idw_1 <- idw(formula = BNPR ~ 1,
              locations = manure_Cd_sf,
@@ -1603,7 +1619,7 @@ plot_dep <- ggplot()+
 plot_man/plot_dep
 
 # ggsave("Figures/Figure_5.pdf", plot_man/plot_dep,
-#        width = 10, 
+#        width = 10,
 #        height = 6,
 #        device = cairo_pdf)
 
